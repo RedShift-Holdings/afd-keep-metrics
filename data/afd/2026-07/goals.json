@@ -1,0 +1,9 @@
+{
+  "collectionsGoal": 250000.0,
+  "departmentGoals": {
+    "Dentists": 190000.0,
+    "Hygienists": 70000.0
+  },
+  "addOnGoal": 20000.0,
+  "newPatientsGoal": 40
+}

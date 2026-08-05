@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<title>Keep Metrics</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="gate" id="gate">
+  <div class="gate-box">
+    <img class="ask-logo" src="assets/ask-logo-color.png" alt="ASK System">
+    <div class="mark"><span class="mark-keep">Keep</span> Metrics</div>
+    <form id="gateForm">
+      <input type="password" id="gatePassword" placeholder="Password" autocomplete="current-password" required>
+      <button type="submit">View Report</button>
+    </form>
+    <div class="gate-error" id="gateError"></div>
+    <div class="gate-note">This link is private. If you weren't given a password directly, you're not meant to have this link.</div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="infoModal">
+  <div class="modal-box">
+    <button class="modal-close" id="infoClose" type="button" aria-label="Close">&times;</button>
+    <h2>Monthly Report Checklist</h2>
+    <p class="modal-sub">Run these four reports at month-end, then enter the numbers under Entry / Upload once logged in. About 10 minutes once you know where each number goes.</p>
+
+    <h3>1. Provider A/R Totals</h3>
+    <p>Run for the full month just closed. Use the TOTAL row for practice-wide production/collections, and the Prev. Month / YTD rows for the comparison columns. Use each provider's own row for their individual numbers.</p>
+    <p class="modal-feeds">&rarr; Feeds: Practice Performance and the Providers table.</p>
+
+    <h3>2. Aging Report (Patient/Guarantor)</h3>
+    <p>Run with no date filter, as of today. Use the TOTALS row at the bottom.</p>
+    <p class="modal-feeds">&rarr; Feeds: Patient/Guarantor Aging.</p>
+
+    <h3>3. Dental Insurance Claim Aging Report</h3>
+    <p>Run the "all claims" version (no minimum-age filter). Use the PRIMARY CLAIM TOTALS and SECONDARY CLAIM TOTALS rows at the bottom.</p>
+    <p class="modal-feeds">&rarr; Feeds: Insurance Claims Aging, Primary and Secondary.</p>
+
+    <h3>4. New Patients &amp; Add-On Production</h3>
+    <p>Pull the new-patient count for the month, and production per category for any add-on services tracked separately (Ortho, Whitening, Implants, etc.).</p>
+    <p class="modal-feeds">&rarr; Feeds: New Patients and Add-On Services.</p>
+
+    <p class="modal-tiny">Tardiness and days-off come separately, straight from the doctor — not part of this list. Provider rows can also be uploaded as a CSV instead of typed in one at a time. Goals are set once under Settings, not re-entered monthly.</p>
+  </div>
+</div>
+
+<div class="app" id="app"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="assets/config.js"></script>
+<script src="assets/crypto.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
