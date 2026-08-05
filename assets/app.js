@@ -223,18 +223,24 @@ function renderTeamHealthTab(content, periodsObj, pk) {
   const th = d.teamHealth;
   const pol = th.policy;
   const emps = th.employees.slice().sort((a, b) => {
-    // worst on-time first, non-standard last
+    // Key Leaders grouped first, then worst on-time first, non-standard last
+    if (!!a.isLeader !== !!b.isLeader) return a.isLeader ? -1 : 1;
     if (a.nonStandardSchedule !== b.nonStandardSchedule) return a.nonStandardSchedule ? 1 : -1;
     return (a.onTimePct ?? 999) - (b.onTimePct ?? 999);
   });
   const flagged = emps.filter(e => !e.nonStandardSchedule && (e.lateCount > 0 || e.lunchOverageCount > 0)).length;
   const perfect = emps.filter(e => !e.nonStandardSchedule && e.lateCount === 0 && e.lunchOverageCount === 0).length;
+  const leaders = emps.filter(e => e.isLeader && !e.nonStandardSchedule);
+  const lw = leaders.reduce((a, e) => a + e.daysWorked, 0);
+  const ll = leaders.reduce((a, e) => a + e.lateCount, 0);
+  const leaderOT = lw ? Math.round((lw - ll) / lw * 100) : null;
 
   content.appendChild(el("div", { class: "kpis" }, [
     statCard("Team On-Time Rate", th.onTimeRatePct + "%", "var(--navy)", "standard-schedule staff"),
+    leaderOT != null ? statCard("Key Leaders On-Time", leaderOT + "%", leaderOT >= 95 ? "var(--green)" : "var(--red)", "examined separately") : null,
     statCard("Perfect Attendance", String(perfect), "var(--green)", "0 late, 0 lunch overage"),
     statCard("Staff With Flags", String(flagged), flagged ? "var(--amber)" : "var(--green)", "late or long-lunch this period"),
-  ]));
+  ].filter(Boolean)));
 
   content.appendChild(el("p", { class: "muted" }, T(
     "Admin & manager only - the team screen sees on-time rate by department, never individual names. " +
@@ -247,12 +253,14 @@ function renderTeamHealthTab(content, periodsObj, pk) {
     [[pol.scheduledStart, pol.lateAfter, pol.lunchWindow, pol.lunchMaxMinutes + " min", "95%", pol.nonStandardEmployees.join(", ") || "&mdash;"]]));
 
   content.appendChild(sectionHead("Per-Employee Scorecard"));
+  content.appendChild(el("p", { class: "muted" }, T("Key Leaders (Dr. Mitchell, Dr. Yassa, Leny A, Sammie R) are examined separately. The two doctors are production-based and don't punch a clock, so attendance covers Leny and Sammie.")));
   content.appendChild(table(
-    ["Employee", "Dept", "Days", "On-Time", "Late", "Lunch Overages", "Worst Late"],
+    ["Employee", "Group", "Days", "On-Time", "Late", "Lunch Overages", "Worst Late"],
     emps.map(e => {
       const worst = e.lateDays.length ? e.lateDays.reduce((a, b) => b.deltaMin > a.deltaMin ? b : a) : null;
+      const groupCell = e.isLeader ? el("span", { class: "chip", style: "background:var(--navy)" }, T("Key Leader")) : e.dept;
       return [
-        e.employee, e.dept, e.daysWorked,
+        e.employee, groupCell, e.daysWorked,
         e.nonStandardSchedule ? el("span", { class: "chip rate-na" }, T("non-standard")) : rateChip(e.onTimePct, e.lateCount, e.daysWorked),
         e.nonStandardSchedule ? "&mdash;" : e.lateCount,
         e.lunchOverageCount,
@@ -461,7 +469,7 @@ function buildPayloads(d) {
   const otDays = std.reduce((a, e) => a + (e.daysWorked - e.lateCount), 0);
   const totDays = std.reduce((a, e) => a + e.daysWorked, 0);
   const deptOT = {};
-  std.forEach(e => { const b = deptOT[e.dept] = deptOT[e.dept] || { w: 0, l: 0 }; b.w += e.daysWorked; b.l += e.lateCount; });
+  std.forEach(e => { const g = e.group || (e.isLeader ? "Key Leaders" : e.dept); const b = deptOT[g] = deptOT[g] || { w: 0, l: 0 }; b.w += e.daysWorked; b.l += e.lateCount; });
   const team = {
     role: "team", client: d.client, period: d.period, prepared: d.prepared,
     kpis: { production: d.performance.current.production, collections: d.performance.current.collections, collectionRatePct: d.performance.current.production ? Math.round(d.performance.current.collections / d.performance.current.production * 100) : 0 },

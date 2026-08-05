@@ -35,6 +35,11 @@ DEPTS = {
     "Manzoor Munazah": "Dental Hygienists", "Mitchell Zachary R": "Dental Assistants",
 }
 PART_TIME = {"Mitchell Zachary R"}
+# Key leaders whose time is examined separately from their functional department.
+# The two dentists are also leaders but production-based (they don't punch a clock),
+# so the attendance leadership bucket is Leny (Arevalo) + Sammie (Rodriguez).
+LEADERS = {"Arevalo Marleny", "Rodriguez Samantha"}
+LEADER_GROUP = "Key Leaders"
 
 def display_name(raw):
     i = raw.find(" ")
@@ -46,10 +51,14 @@ for raw_name, dept in DEPTS.items():
     lunch = [{"date": l[0][:5], "outTime": l[2], "inTime": l[3], "minutes": l[4]} for l in tard_raw["lunch"].get(raw_name, [])]
     worked = tard_raw["worked_days"].get(raw_name, 0)
     non_standard = raw_name in PART_TIME
+    is_leader = raw_name in LEADERS
+    group = LEADER_GROUP if is_leader else dept
     late_pct = round(len(late) / worked * 100) if (worked and not non_standard) else None
     tardiness_employees.append({
         "employee": display_name(raw_name),
         "dept": dept,
+        "group": group,
+        "isLeader": is_leader,
         "daysWorked": worked,
         "nonStandardSchedule": non_standard,
         "lateCount": len(late),
@@ -201,10 +210,11 @@ team = {
     "newPatients": {"actual": admin["newPatients"]["actual"]},
     "addOnProduction": round(sum(a["production"] for a in admin["addOnServices"]), 2),
 }
-# department-level on-time (aggregate, no names) for the team view
+# group-level on-time (aggregate, no names) for the team view - Key Leaders
+# broken out from their functional departments
 dept_ot = {}
 for e in standard:
-    b = dept_ot.setdefault(e["dept"], {"worked": 0, "late": 0})
+    b = dept_ot.setdefault(e["group"], {"worked": 0, "late": 0})
     b["worked"] += e["daysWorked"]; b["late"] += e["lateCount"]
 team["teamHealth"]["byDepartment"] = {
     dept: round((b["worked"] - b["late"]) / b["worked"] * 100) if b["worked"] else None
