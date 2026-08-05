@@ -138,12 +138,21 @@ function renderFull(container, periodsObj, level, password) {
   container.appendChild(el("span", { class: `badge ${LEVEL_BADGE[level]}` }, T(LEVEL_LABEL[level])));
   container.appendChild(el("p", { class: "subline" }, T(`${d.period} · Prepared ${d.prepared}`)));
 
-  const tabs = ["Financial", "Team Health", "Days Off", "Entry / Upload"];
+  // Data entry is public links (not gated) - shown here so admin/manager can share them.
+  if (level === "admin" || level === "manager") {
+    container.appendChild(el("p", { class: "entry-links" }, [
+      T("Data entry links to share — "),
+      el("a", { href: "enter.html", target: "_blank" }, T("Monthly Numbers")),
+      T(" · "),
+      el("a", { href: "feedback.html", target: "_blank" }, T("Team Check-In")),
+    ]));
+  }
+
+  const tabs = ["Financial", "Team Health", "Days Off"];
   if (level === "admin") tabs.push("Settings");
   const renderers = {
     "Financial": renderFinancial, "Team Health": renderTeamHealthTab,
-    "Days Off": renderDaysOff, "Entry / Upload": (c, p, k) => renderEntry(c, p, k, level, password),
-    "Settings": renderSettings,
+    "Days Off": renderDaysOff, "Settings": renderSettings,
   };
   const tabBar = el("div", { class: "tabbar" });
   const content = el("div", { class: "tabcontent" });
@@ -295,208 +304,6 @@ function renderDaysOff(content, periodsObj, pk) {
   content.appendChild(sectionHead("No-Punch Gaps (Active Employees)"));
   content.appendChild(table(["Employee", "Dept", "No-Punch Days", "Note"],
     d.daysOff.noPunchGaps.map(g => [g.employee, g.dept, g.gapDays + "/" + d.daysOff.businessDays, g.note || ""]), [2]));
-}
-
-// ---------------- ENTRY WIZARD (admin + manager) ----------------
-function renderEntry(content, periodsObj, pk, level, password) {
-  const d = JSON.parse(JSON.stringify(periodsObj[pk]));
-  const set = (path, val) => { const p = path.split("."); let c = d; for (let i = 0; i < p.length - 1; i++) c = c[p[i]]; c[p[p.length - 1]] = val; };
-  const numField = (label, path, val) => {
-    const i = el("input", { type: "number", step: "0.01", value: val });
-    i.addEventListener("input", () => set(path, parseFloat(i.value) || 0));
-    return el("div", { class: "field-row" }, [el("label", {}, T(label)), i]);
-  };
-  const grid = (fields) => el("div", { class: "field-grid" }, fields);
-
-  // ---- step bodies ----
-  const stepPerformance = (body) => {
-    body.appendChild(el("p", { class: "wiz-hint" }, [
-      el("button", { class: "info-icon", type: "button", title: "Which Dentrix reports", onclick: () => document.getElementById("infoModal").classList.add("visible") }, T("i")),
-      el("span", {}, T("From the Provider A/R Totals report — the TOTAL row and its Prev. Month / YTD columns.")),
-    ]));
-    body.appendChild(grid([
-      numField("Gross Production", "performance.current.production", d.performance.current.production),
-      numField("Net Collections", "performance.current.collections", d.performance.current.collections),
-      numField("Production Adjustments (+)", "performance.current.prodAdj", d.performance.current.prodAdj),
-      numField("Ending A/R Balance", "performance.current.arBalance", d.performance.current.arBalance),
-      numField("Prior Period Production", "performance.prior.production", d.performance.prior.production),
-      numField("Prior Period Collections", "performance.prior.collections", d.performance.prior.collections),
-      numField("YTD Production", "performance.ytd.production", d.performance.ytd.production),
-      numField("YTD Collections", "performance.ytd.collections", d.performance.ytd.collections),
-    ]));
-  };
-  const stepAging = (body) => {
-    body.appendChild(el("p", { class: "wiz-hint" }, T("Patient totals from the Aging Report; claim totals from the Insurance Claim Aging Report.")));
-    body.appendChild(el("div", { class: "sub-label" }, T("Patient / Guarantor Aging")));
-    body.appendChild(grid([
-      numField("Current (0-30)", "patientAging.current", d.patientAging.current),
-      numField("31-60 Days", "patientAging.d31_60", d.patientAging.d31_60),
-      numField("61-90 Days", "patientAging.d61_90", d.patientAging.d61_90),
-      numField("Over 90 Days", "patientAging.over90", d.patientAging.over90),
-      numField("Est. Insurance Owed", "patientAging.insEst", d.patientAging.insEst),
-      numField("Guarantor Portion", "patientAging.guarPortion", d.patientAging.guarPortion),
-    ]));
-    body.appendChild(el("div", { class: "sub-label" }, T("Insurance Claims Aging")));
-    body.appendChild(grid([
-      numField("Primary — Current", "insuranceAging.primary.current", d.insuranceAging.primary.current),
-      numField("Secondary — Current", "insuranceAging.secondary.current", d.insuranceAging.secondary.current),
-      numField("Primary — 31-60", "insuranceAging.primary.d31_60", d.insuranceAging.primary.d31_60),
-      numField("Secondary — 31-60", "insuranceAging.secondary.d31_60", d.insuranceAging.secondary.d31_60),
-      numField("Primary — 61-90", "insuranceAging.primary.d61_90", d.insuranceAging.primary.d61_90),
-      numField("Secondary — 61-90", "insuranceAging.secondary.d61_90", d.insuranceAging.secondary.d61_90),
-      numField("Primary — Over 90", "insuranceAging.primary.over90", d.insuranceAging.primary.over90),
-      numField("Secondary — Over 90", "insuranceAging.secondary.over90", d.insuranceAging.secondary.over90),
-    ]));
-  };
-  const stepPatients = (body) => {
-    body.appendChild(el("p", { class: "wiz-hint" }, T("New-patient count and production for any add-on services tracked separately.")));
-    body.appendChild(grid([numField("New Patients This Period", "newPatients.actual", d.newPatients.actual)]));
-    body.appendChild(el("div", { class: "sub-label" }, T("Add-On Services")));
-    const box = el("div", {});
-    const rr = () => {
-      box.innerHTML = "";
-      d.addOnServices.forEach((a, idx) => {
-        const n = el("input", { value: a.name, placeholder: "Service name" });
-        n.addEventListener("input", () => d.addOnServices[idx].name = n.value);
-        const p = el("input", { type: "number", step: "0.01", value: a.production, placeholder: "Production" });
-        p.addEventListener("input", () => d.addOnServices[idx].production = parseFloat(p.value) || 0);
-        box.appendChild(el("div", { class: "provider-row", style: "margin-bottom:8px" }, [n, p,
-          el("button", { class: "rm-btn", onclick: () => { d.addOnServices.splice(idx, 1); rr(); } }, T("×"))]));
-      });
-    };
-    rr();
-    body.append(box, el("button", { class: "add-btn", onclick: () => { d.addOnServices.push({ name: "", production: 0 }); rr(); } }, T("+ Add service")));
-  };
-  const stepProviders = (body) => {
-    const dz = el("label", { class: "dropzone" }, [
-      el("div", { class: "dz-title" }, T("Upload provider CSV")),
-      el("div", { class: "dz-sub" }, T("columns: provider_name, provider_role, gross_production, adjustments, net_collections")),
-    ]);
-    const csv = el("input", { type: "file", accept: ".csv", style: "display:none" });
-    dz.appendChild(csv);
-    const box = el("div", {});
-    const rr = () => {
-      box.innerHTML = "";
-      box.appendChild(el("div", { class: "provider-head" }, ["Name", "Role", "Production", "Adjustments", "Collections", ""].map(h => el("span", {}, T(h)))));
-      d.providers.forEach((p, idx) => {
-        const mk = (k, ph, isNum) => { const i = el("input", isNum ? { type: "number", step: "0.01", value: p[k] } : { value: p[k], placeholder: ph }); i.addEventListener("input", () => d.providers[idx][k] = isNum ? (parseFloat(i.value) || 0) : i.value); return i; };
-        box.appendChild(el("div", { class: "provider-row", style: "margin-bottom:8px" }, [
-          mk("name", "Name"), mk("role", "Role"), mk("production", "", true), mk("adjustments", "", true), mk("collections", "", true),
-          el("button", { class: "rm-btn", onclick: () => { d.providers.splice(idx, 1); rr(); } }, T("×"))]));
-      });
-    };
-    csv.addEventListener("change", (ev) => handleCSV(ev, d, rr));
-    rr();
-    body.append(dz, box, el("button", { class: "add-btn", onclick: () => { d.providers.push({ name: "", role: "", production: 0, adjustments: 0, collections: 0, collRate: 0 }); rr(); } }, T("+ Add provider")));
-  };
-  const stepReview = (body) => {
-    d.providers.forEach(p => p.collRate = p.production ? Math.round(p.collections / p.production * 100) : 0);
-    const collRate = d.performance.current.production ? Math.round(d.performance.current.collections / d.performance.current.production * 100) : 0;
-    body.appendChild(el("p", { class: "wiz-hint" }, T("Quick check before saving. Save updates the report immediately.")));
-    body.appendChild(el("div", { class: "review-grid" }, [
-      ["Production", money0(d.performance.current.production)],
-      ["Collections", money0(d.performance.current.collections)],
-      ["Collection Rate", collRate + "%"],
-      ["New Patients", String(d.newPatients.actual)],
-      ["Add-On Production", money0(d.addOnServices.reduce((a, x) => a + x.production, 0))],
-      ["Providers", String(d.providers.length)],
-    ].map(([k, v]) => el("div", { class: "review-cell" }, [el("div", { class: "rc-label" }, T(k)), el("div", { class: "rc-val" }, T(v))]))));
-    const status = el("div", { class: "save-status" });
-    const saveBtn = el("button", { class: "primary-btn" }, T("Save Numbers"));
-    saveBtn.addEventListener("click", () => {
-      try {
-        const built = buildPayloads(d);
-        LEVELS.forEach(lv => saveOverride(pk, lv, built[lv]));
-        session.periods[pk] = built[level];
-        downloadJSON({ client: d.client, period: d.period, saved: true, numbers: stripToNumbers(d) }, `${CLIENT}-${pk}-numbers.json`);
-        status.style.color = "var(--green)";
-        status.innerHTML = "✓ Saved. The report now shows these numbers. A numbers file also downloaded for publishing (see README data-path).";
-      } catch (e) { status.style.color = "var(--red)"; status.textContent = "Save failed: " + e.message; }
-    });
-    body.append(saveBtn, status);
-  };
-
-  const steps = [
-    { title: "Performance", body: stepPerformance },
-    { title: "A/R Aging", body: stepAging },
-    { title: "Patients & Add-Ons", body: stepPatients },
-    { title: "Providers", body: stepProviders },
-    { title: "Review & Save", body: stepReview },
-  ];
-  let cur = 0;
-
-  const wizard = el("div", { class: "wizard" });
-  const stepsBar = el("div", { class: "wiz-steps" });
-  const bodyWrap = el("div", { class: "entry-form wiz-body" });
-  const nav = el("div", { class: "wiz-nav" });
-  content.append(wizard);
-  wizard.append(stepsBar, bodyWrap, nav);
-
-  function draw() {
-    stepsBar.innerHTML = "";
-    steps.forEach((s, i) => {
-      const cls = "wiz-step" + (i === cur ? " active" : "") + (i < cur ? " done" : "");
-      const chip = el("div", { class: cls, onclick: () => { if (i <= cur) { cur = i; draw(); } } }, [
-        el("span", { class: "wiz-num" }, T(i < cur ? "✓" : String(i + 1))),
-        el("span", { class: "wiz-title" }, T(s.title)),
-      ]);
-      stepsBar.appendChild(chip);
-    });
-    bodyWrap.innerHTML = "";
-    bodyWrap.appendChild(el("h2", {}, T(steps[cur].title)));
-    steps[cur].body(bodyWrap);
-    nav.innerHTML = "";
-    nav.appendChild(cur > 0 ? el("button", { class: "ghost-btn", onclick: () => { cur--; draw(); } }, T("← Back")) : el("span", {}));
-    nav.appendChild(cur < steps.length - 1 ? el("button", { class: "primary-btn", style: "margin-top:0", onclick: () => { cur++; draw(); } }, T("Next →")) : el("span", {}));
-  }
-  draw();
-}
-
-function stripToNumbers(d) {
-  return {
-    performance: d.performance, patientAging: d.patientAging, insuranceAging: d.insuranceAging,
-    newPatients: d.newPatients, addOnServices: d.addOnServices, providers: d.providers,
-  };
-}
-
-// derive admin/manager/team payloads from an edited full-report object
-function buildPayloads(d) {
-  const admin = JSON.parse(JSON.stringify(d)); admin.role = "admin"; admin.canEditGoals = true;
-  const manager = JSON.parse(JSON.stringify(d)); manager.role = "manager"; manager.canEditGoals = false;
-  const deptT = {};
-  d.providers.forEach(p => { const k = p.role === "Dentist" ? "Dentists" : "Hygienists"; (deptT[k] = deptT[k] || { production: 0, collections: 0 }); deptT[k].production += p.production; deptT[k].collections += p.collections; });
-  const std = d.teamHealth.employees.filter(e => !e.nonStandardSchedule);
-  const otDays = std.reduce((a, e) => a + (e.daysWorked - e.lateCount), 0);
-  const totDays = std.reduce((a, e) => a + e.daysWorked, 0);
-  const deptOT = {};
-  std.forEach(e => { const g = e.group || (e.isLeader ? "Key Leaders" : e.dept); const b = deptOT[g] = deptOT[g] || { w: 0, l: 0 }; b.w += e.daysWorked; b.l += e.lateCount; });
-  const team = {
-    role: "team", client: d.client, period: d.period, prepared: d.prepared,
-    kpis: { production: d.performance.current.production, collections: d.performance.current.collections, collectionRatePct: d.performance.current.production ? Math.round(d.performance.current.collections / d.performance.current.production * 100) : 0 },
-    byDepartment: Object.entries(deptT).map(([dept, v]) => ({ dept, production: Math.round(v.production * 100) / 100, collections: Math.round(v.collections * 100) / 100 })),
-    teamHealth: { onTimeRatePct: totDays ? Math.round(otDays / totDays * 100) : null, byDepartment: Object.fromEntries(Object.entries(deptOT).map(([k, b]) => [k, b.w ? Math.round((b.w - b.l) / b.w * 100) : null])) },
-    attendance: { vacationDaysTaken: d.daysOff.vacation.reduce((a, v) => a + (typeof v.days === "number" ? v.days : 1), 0), holidayDate: d.daysOff.holidayDate },
-    labor: d.labor.map(l => ({ dept: l.dept, staffCount: l.staffCount, hours: l.hours })),
-    newPatients: { actual: d.newPatients.actual },
-    addOnProduction: Math.round(d.addOnServices.reduce((a, x) => a + x.production, 0) * 100) / 100,
-  };
-  return { admin, manager, team };
-}
-
-function handleCSV(ev, d, cb) {
-  const f = ev.target.files[0]; if (!f) return;
-  const r = new FileReader();
-  r.onload = () => {
-    const lines = r.result.split(/\r?\n/).filter(l => l.trim());
-    const hdr = lines[0].split(",").map(h => h.trim());
-    d.providers = lines.slice(1).map(line => {
-      const c = line.split(","); const rec = {}; hdr.forEach((h, i) => rec[h] = (c[i] || "").trim());
-      const production = parseFloat(rec.gross_production || 0), collections = parseFloat(rec.net_collections || 0);
-      return { name: rec.provider_name || "", role: rec.provider_role || "", production, adjustments: parseFloat(rec.adjustments || 0), collections, collRate: production ? Math.round(collections / production * 100) : 0 };
-    });
-    cb();
-  };
-  r.readAsText(f);
 }
 
 // ---------------- SETTINGS (admin only) ----------------

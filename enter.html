@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<title>Monthly Numbers</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="public-page">
+  <div class="app-brand"><img src="assets/ask-logo-color.png" alt="ASK System"></div>
+  <h1 class="public-title"><span class="mark-keep">Keep</span> Metrics — Monthly Numbers</h1>
+  <p class="public-sub" id="publicSub">Management entry. Fill in the month's numbers from the Dentrix report totals and submit.</p>
+  <div id="entryRoot"></div>
+</div>
+
+<div class="modal-overlay" id="infoModal">
+  <div class="modal-box">
+    <button class="modal-close" id="infoClose" type="button" aria-label="Close">&times;</button>
+    <h2>Which Dentrix reports</h2>
+    <p class="modal-sub">Run these at month-end; enter the totals-row numbers here.</p>
+    <h3>Performance</h3><p>Provider A/R Totals — the TOTAL row, plus its Prev. Month / YTD columns.</p>
+    <h3>A/R Aging</h3><p>Aging Report (patient TOTALS row) and Insurance Claim Aging Report (Primary / Secondary claim totals).</p>
+    <h3>Patients &amp; Add-Ons</h3><p>New-patient count and production per add-on category (Ortho, Whitening, Implants, etc.).</p>
+    <p class="modal-tiny">Attendance/tardiness comes separately from the doctor — not entered here.</p>
+  </div>
+</div>
+
+<script src="assets/config.js"></script>
+<script src="assets/common.js"></script>
+<script src="assets/entry-app.js"></script>
+</body>
+</html>

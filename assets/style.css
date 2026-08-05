@@ -155,6 +155,30 @@ tbody tr:hover td{background:#FAFBFC;}
 
 .section{margin-bottom:8px;}
 
+/* ---------------- public entry / feedback pages ---------------- */
+.public-page{max-width:820px;margin:0 auto;padding:34px 26px 70px;}
+.public-title{font-size:24px;font-weight:700;color:var(--navy);margin:6px 0 8px;letter-spacing:-.01em;}
+.public-title .mark-keep{color:var(--ask-green);}
+.public-sub{color:var(--grey);font-size:14px;line-height:1.55;margin:0 0 24px;max-width:640px;}
+.public-form{max-width:640px;}
+.public-form textarea{padding:9px 11px;font-size:13.5px;border:1px solid var(--border);background:#FCFDFE;width:100%;font-family:inherit;resize:vertical;}
+.public-form textarea:focus{outline:none;border-color:var(--steel);}
+.public-form select{padding:9px 11px;font-size:13.5px;border:1px solid var(--border);background:#FCFDFE;width:100%;}
+.public-form select:focus{outline:none;border-color:var(--steel);}
+.rating{display:flex;gap:8px;}
+.rating-dot{width:40px;height:40px;border:1px solid var(--border);background:#FCFDFE;color:var(--grey);font-size:15px;font-weight:700;cursor:pointer;transition:all .12s;}
+.rating-dot:hover{border-color:var(--steel);}
+.rating-dot.on{background:var(--ask-green);border-color:var(--ask-green);color:#fff;}
+.rating-scale{font-size:11px;color:var(--grey);margin-top:4px;}
+.done-card{background:var(--card);border:1px solid var(--border);box-shadow:0 1px 3px rgba(27,42,74,.05);padding:44px;text-align:center;max-width:520px;}
+.done-check{width:56px;height:56px;border-radius:50% !important;background:var(--green);color:#fff;font-size:28px;
+  display:flex;align-items:center;justify-content:center;margin:0 auto 18px;}
+.done-card h2{font-size:20px;color:var(--navy);margin:0 0 10px;border:none;padding:0;text-transform:none;letter-spacing:0;}
+.done-card p{color:var(--grey);font-size:13.5px;line-height:1.6;margin:0;}
+.entry-links{font-size:12px;color:var(--grey);margin:0 0 20px;}
+.entry-links a{color:var(--steel);text-decoration:none;border-bottom:1px solid var(--border);}
+.entry-links a:hover{color:var(--navy);}
+
 /* ---------------- entry wizard ---------------- */
 .wizard{max-width:760px;}
 .wiz-steps{display:flex;gap:0;margin-bottom:18px;flex-wrap:wrap;}
