@@ -25,3 +25,15 @@ function downloadJSON(obj, filename) {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+// current month as YYYY-MM (browser-local; fine client-side)
+function currentYM() { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); }
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+function ymToLabel(ym) { if (!ym) return ""; const p = ym.split("-"); return (MONTH_NAMES[(+p[1]) - 1] || "") + " " + p[0]; }
+// native month picker (calendar icon built in), defaults to the current month
+function monthField(label, onChange) {
+  const i = el("input", { type: "month", value: currentYM() });
+  const apply = () => onChange(ymToLabel(i.value), i.value);
+  i.addEventListener("input", apply);
+  apply(); // seed the data model with the current month
+  return el("div", { class: "field-row" }, [el("label", {}, T(label)), i]);
+}

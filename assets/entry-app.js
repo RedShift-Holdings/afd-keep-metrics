@@ -42,8 +42,8 @@ const stepPerformance = (b) => {
     el("span", {}, T("From the Provider A/R Totals report — the TOTAL row and its Prev. Month / YTD columns.")),
   ]));
   b.appendChild(grid([
-    textField("Reporting Month (e.g. July 2026)", "period", "July 2026"),
-    textField("Submitted By", "submittedBy", "Your name"),
+    monthField("Reporting Month", (label, ym) => { d.period = label; d.periodKey = ym; }),
+    textField("Submitted By (required)", "submittedBy", "Your name"),
     numField("Gross Production", "performance.current.production", ""),
     numField("Net Collections", "performance.current.collections", ""),
     numField("Production Adjustments (+)", "performance.current.prodAdj", ""),
@@ -126,8 +126,9 @@ const stepReview = (b) => {
   const status = el("div", { class: "save-status" });
   const btn = el("button", { class: "primary-btn" }, T("Submit Numbers"));
   btn.addEventListener("click", () => {
-    if (!d.period.trim()) { status.style.color = "var(--red)"; status.textContent = "Enter the reporting month first."; return; }
-    downloadJSON({ client: CLIENT, type: "monthly-numbers", ...d }, `${CLIENT}-${d.period.replace(/\s+/g, "-").toLowerCase()}-numbers.json`);
+    if (!d.period.trim()) { status.style.color = "var(--red)"; status.textContent = "Pick the reporting month first."; return; }
+    if (!d.submittedBy.trim()) { status.style.color = "var(--red)"; status.textContent = "Add who's submitting (Submitted By)."; return; }
+    downloadJSON({ client: CLIENT, type: "monthly-numbers", ...d }, `${CLIENT}-${(d.periodKey || d.period).replace(/\s+/g, "-").toLowerCase()}-numbers.json`);
     document.getElementById("entryRoot").innerHTML = "";
     document.getElementById("entryRoot").appendChild(el("div", { class: "done-card" }, [
       el("div", { class: "done-check" }, T("✓")),

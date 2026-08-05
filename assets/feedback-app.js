@@ -39,8 +39,8 @@ function rating(label, key) {
 
 form.appendChild(sectionHead("About You"));
 form.appendChild(el("div", { class: "field-grid" }, [
-  text("Reporting Month (e.g. July 2026)", "period", "July 2026"),
-  text("Your Name (optional)", "name", "Leave blank to stay anonymous"),
+  monthField("Reporting Month", (label, ym) => { resp.period = label; resp.periodKey = ym; }),
+  text("Your Name (required)", "name", "First and last"),
 ]));
 form.appendChild(select("Your Team", "dept", DEPTS));
 
@@ -57,8 +57,8 @@ form.appendChild(area("KEEP — what's working that we should protect and keep d
 const status = el("div", { class: "save-status" });
 const btn = el("button", { class: "primary-btn" }, T("Submit Check-In"));
 btn.addEventListener("click", () => {
-  if (!resp.period.trim() || !resp.dept) { status.style.color = "var(--red)"; status.textContent = "Please add the month and your team."; return; }
-  downloadJSON(resp, `${CLIENT}-${resp.period.replace(/\s+/g, "-").toLowerCase()}-checkin-${(resp.name || "anon").replace(/\s+/g, "")}.json`);
+  if (!resp.period.trim() || !resp.name.trim() || !resp.dept) { status.style.color = "var(--red)"; status.textContent = "Please add the month, your name, and your team."; return; }
+  downloadJSON(resp, `${CLIENT}-${(resp.periodKey || resp.period).replace(/\s+/g, "-").toLowerCase()}-checkin-${resp.name.replace(/\s+/g, "")}.json`);
   root.innerHTML = "";
   root.appendChild(el("div", { class: "done-card" }, [
     el("div", { class: "done-check" }, T("✓")),
