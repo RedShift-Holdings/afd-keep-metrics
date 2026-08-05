@@ -2,6 +2,18 @@
 Assembles the two per-month JSON payloads (owner = full detail, team = aggregate-only)
 from already-verified AFD July 2026 figures (see _clients/AFD/Reports/ PDFs, same session).
 
+Tardiness/lunch figures below are computed from recomputed_tardiness.json (produced by
+parsing the raw Timecard PDF - see that file's own generation script in scratch), using
+the REAL company policy Glenn gave us, not a statistical guess:
+  - Scheduled start 7:50 AM; not late until after 8:10 AM (20-min grace window).
+  - Lunch runs 1:00-2:00 PM; only flagged if the midday gap runs over 60 minutes.
+  - Mitchell, Zachary R is part-time and does not follow the standard schedule -
+    excluded from the lateness check entirely.
+  - Trimble, Rosanne / Fonseca Osorio, Stephanie / Lyubavina, Ekaterina E / Mitchell,
+    Daniel are INACTIVE employees (confirmed by Glenn) - their holiday-pay-only records
+    are a payroll artifact, not an attendance gap, so they're excluded from the active
+    roster entirely rather than flagged.
+
 This is the "for now" data-entry step: run this (or a CSV-driven equivalent, see
 parse_csv_example.py) once a month, review the JSON, then run encrypt_data.py to
 produce the .enc files that actually ship to the site.
@@ -10,8 +22,39 @@ import json, os
 
 CLIENT = "afd"
 PERIOD = "2026-07"
-OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", CLIENT, PERIOD)
+SCRIPT_DIR = os.path.dirname(__file__)
+OUT_DIR = os.path.join(SCRIPT_DIR, "..", "data", CLIENT, PERIOD)
 os.makedirs(OUT_DIR, exist_ok=True)
+
+tard_raw = json.load(open(os.path.join(SCRIPT_DIR, "recomputed_tardiness.json")))
+
+DEPTS = {
+    "Arevalo Marleny": "Dental Assistants", "Barber Jacqueline": "Front Office",
+    "Rodriguez Samantha": "Dental Assistants", "Roman Thomas": "Dental Assistants",
+    "Youngman Kayla": "Dental Assistants", "Johnson Latavia": "Dental Hygienists",
+    "Majkich Karen M": "Dental Hygienists", "Maldonado-Mancilla Ivonne": "Dental Assistants",
+    "Manzoor Munazah": "Dental Hygienists", "Mitchell Zachary R": "Dental Assistants",
+}
+INACTIVE = ["Trimble Rosanne", "Fonseca Osorio Stephanie", "Lyubavina Ekaterina E", "Mitchell Daniel"]
+PART_TIME = {"Mitchell Zachary R"}
+
+def display_name(raw):
+    # "Arevalo Marleny" -> "Arevalo, Marleny"; "Mitchell Zachary R" -> "Mitchell, Zachary R"
+    first_space = raw.find(" ")
+    return raw[:first_space] + "," + raw[first_space:]
+
+tardiness_employees = []
+for raw_name, dept in DEPTS.items():
+    late = [{"date": d[0][:5], "time": d[2], "deltaMin": d[3]} for d in tard_raw["late"].get(raw_name, [])]
+    lunch = [{"date": l[0][:5], "outTime": l[2], "inTime": l[3], "minutes": l[4]} for l in tard_raw["lunch"].get(raw_name, [])]
+    tardiness_employees.append({
+        "employee": display_name(raw_name),
+        "dept": dept,
+        "daysWorked": tard_raw["worked_days"].get(raw_name, 0),
+        "nonStandardSchedule": raw_name in PART_TIME,
+        "lateDays": late,
+        "lunchOverages": lunch,
+    })
 
 # ---------------------------------------------------------------
 # OWNER VIEW — everything. Only the doctor's password unlocks this.
@@ -50,35 +93,24 @@ owner = {
         {"patient": "Pidskalny, Bryn", "payer": "Delta Dental / Individual 2000", "bucket": "Over 90", "amount": 945.00},
     ],
     "labor": [
-        {"dept": "Dental Assistants", "staffCount": 8, "hours": "1042:38", "notes": "Includes Dr. Mitchell (holiday pay only)"},
+        {"dept": "Dental Assistants", "staffCount": 6, "hours": "1042:38", "notes": "Includes Mitchell, Zachary R (part-time, non-standard schedule)"},
         {"dept": "Dental Hygienists", "staffCount": 3, "hours": "477:21", "notes": "Matches the 3 hygienist providers above"},
-        {"dept": "Front Office", "staffCount": 3, "hours": "182:41", "notes": "Only 1 of 3 worked a full month"},
+        {"dept": "Front Office", "staffCount": 1, "hours": "182:41", "notes": "Barber, Jacqueline is the only active front-office employee"},
     ],
+    "tardinessPolicy": {
+        "scheduledStart": "7:50 AM",
+        "lateAfter": "8:10 AM",
+        "lunchWindow": "1:00 PM - 2:00 PM",
+        "lunchMaxMinutes": 60,
+        "nonStandardEmployees": ["Mitchell, Zachary R"],
+    },
     "tardiness": {
-        "methodology": "No official scheduled start time exists in source data; 'late' = personal median arrival + 15min, weekdays only, excludes holiday/vacation.",
-        "deptMedianArrival": {"Front Office": "7:33 AM", "Dental Hygienists": "7:50 AM", "Dental Assistants": "7:52 AM"},
-        "employees": [
-            {"employee": "Mitchell, Zachary R", "dept": "Dental Assistants", "daysWorked": 10, "medianArrival": "8:00 AM",
-             "lateDays": [{"date":"07/07","time":"10:25 AM","deltaMin":145},{"date":"07/14","time":"10:22 AM","deltaMin":142},
-                          {"date":"07/20","time":"9:59 AM","deltaMin":119},{"date":"07/06","time":"9:39 AM","deltaMin":99}]},
-            {"employee": "Arevalo, Marleny", "dept": "Dental Assistants", "daysWorked": 21, "medianArrival": "8:09 AM",
-             "lateDays": [{"date":"07/27","time":"10:49 AM","deltaMin":160},{"date":"07/29","time":"8:50 AM","deltaMin":41},
-                          {"date":"07/24","time":"8:27 AM","deltaMin":18}]},
-            {"employee": "Youngman, Kayla", "dept": "Dental Assistants", "daysWorked": 22, "medianArrival": "7:37 AM",
-             "lateDays": [{"date":"07/15","time":"1:52 PM","deltaMin":375},{"date":"07/07","time":"7:57 AM","deltaMin":20},
-                          {"date":"07/10","time":"7:55 AM","deltaMin":18}]},
-            {"employee": "Majkich, Karen M", "dept": "Dental Hygienists", "daysWorked": 20, "medianArrival": "7:41 AM",
-             "lateDays": [{"date":"07/09","time":"1:35 PM","deltaMin":354},{"date":"07/01","time":"7:58 AM","deltaMin":17}]},
-            {"employee": "Roman, Thomas", "dept": "Dental Assistants", "daysWorked": 19, "medianArrival": "7:33 AM",
-             "lateDays": [{"date":"07/02","time":"7:51 AM","deltaMin":18},{"date":"07/22","time":"7:49 AM","deltaMin":16}]},
-            {"employee": "Manzoor, Munazah", "dept": "Dental Hygienists", "daysWorked": 18, "medianArrival": "7:54 AM",
-             "lateDays": [{"date":"07/09","time":"8:58 AM","deltaMin":64}]},
-            {"employee": "Rodriguez, Samantha", "dept": "Dental Assistants", "daysWorked": 20, "medianArrival": "8:01 AM",
-             "lateDays": [{"date":"07/31","time":"8:22 AM","deltaMin":21}]},
-            {"employee": "Barber, Jacqueline", "dept": "Front Office", "daysWorked": 21, "medianArrival": "7:33 AM", "lateDays": []},
-            {"employee": "Johnson, Latavia", "dept": "Dental Hygienists", "daysWorked": 21, "medianArrival": "7:50 AM", "lateDays": []},
-            {"employee": "Maldonado-Mancilla, Ivonne", "dept": "Dental Assistants", "daysWorked": 22, "medianArrival": "7:49 AM", "lateDays": []},
-        ],
+        "methodology": "Company policy: scheduled start 7:50 AM, not late until after 8:10 AM. Lunch runs "
+                        "1:00-2:00 PM (60 min); only flagged if the midday gap runs over 60 minutes. "
+                        "Mitchell, Zachary R is part-time and does not follow the standard schedule.",
+        "note": "7/2 shows a lunch-overage across almost every active employee - most likely a practice-wide "
+                "event (meeting/training/early close) the day before the July 3 holiday, not individually long lunches.",
+        "employees": tardiness_employees,
     },
     "daysOff": {
         "businessDays": 22,
@@ -88,17 +120,19 @@ owner = {
             {"employee": "Mitchell, Zachary R", "dept": "Dental Assistants", "dates": "7/27 - 7/31 (full week)", "days": 5, "hours": 40.0},
         ],
         "noPunchGaps": [
-            {"employee": "Trimble, Rosanne", "dept": "Front Office", "gapDays": 22, "note": "No activity all month beyond the holiday"},
-            {"employee": "Fonseca Osorio, Stephanie", "dept": "Front Office", "gapDays": 22, "note": "No activity all month beyond the holiday"},
-            {"employee": "Lyubavina, Ekaterina E", "dept": "Dental Assistants", "gapDays": 22, "note": "No activity all month beyond the holiday"},
-            {"employee": "Mitchell, Daniel", "dept": "Dentist (provider)", "gapDays": 22, "note": "Expected - doesn't punch a clock"},
-            {"employee": "Mitchell, Zachary R", "dept": "Dental Assistants", "gapDays": 7, "note": "On top of 5 vacation days"},
+            {"employee": "Mitchell, Zachary R", "dept": "Dental Assistants", "gapDays": 7, "note": "Part-time, non-standard schedule - on top of 5 vacation days, not flagged as an attendance concern"},
             {"employee": "Manzoor, Munazah", "dept": "Dental Hygienists", "gapDays": 4, "note": "All 4 remaining Fridays - looks like a standing 4-day week"},
             {"employee": "Roman, Thomas", "dept": "Dental Assistants", "gapDays": 3, "note": ""},
             {"employee": "Rodriguez, Samantha", "dept": "Dental Assistants", "gapDays": 2, "note": "Back-to-back 7/23-7/24"},
             {"employee": "Majkich, Karen M", "dept": "Dental Hygienists", "gapDays": 2, "note": ""},
             {"employee": "Barber, Jacqueline", "dept": "Front Office", "gapDays": 1, "note": ""},
             {"employee": "Johnson, Latavia", "dept": "Dental Hygienists", "gapDays": 1, "note": ""},
+        ],
+        "inactiveEmployees": [
+            {"employee": "Trimble, Rosanne", "dept": "Front Office"},
+            {"employee": "Fonseca Osorio, Stephanie", "dept": "Front Office"},
+            {"employee": "Lyubavina, Ekaterina E", "dept": "Dental Assistants"},
+            {"employee": "Mitchell, Daniel", "dept": "Dental Assistants"},
         ],
     },
     # PLACEHOLDER - AFD hasn't sent new-patient or add-on-service numbers yet.
@@ -114,16 +148,17 @@ owner = {
 }
 
 # ---------------------------------------------------------------
-# GOALS — a standing baseline, NOT month-specific performance data.
-# Stored in plaintext (not encrypted): a target number alone doesn't
-# disclose actual performance or client identity, so it's a reasonable
-# exception to the encrypt-everything rule. Editable via the Settings tab.
+# GOALS + BASELINES — standing settings, NOT month-specific performance
+# data. Stored in plaintext (not encrypted): none of this discloses actual
+# performance or client identity, so it's a reasonable exception to the
+# encrypt-everything rule. Editable via the Settings tab.
 # ---------------------------------------------------------------
 goals = {
     "collectionsGoal": 250000.00,
     "departmentGoals": {"Dentists": 190000.00, "Hygienists": 70000.00},
     "addOnGoal": 20000.00,
     "newPatientsGoal": 40,
+    "tardinessPolicy": owner["tardinessPolicy"],
 }
 
 # ---------------------------------------------------------------
@@ -137,8 +172,10 @@ for pv in owner["providers"]:
     d["production"] += pv["production"]
     d["collections"] += pv["collections"]
 
-on_time_days = sum(e["daysWorked"] - len(e["lateDays"]) for e in owner["tardiness"]["employees"])
-total_days = sum(e["daysWorked"] for e in owner["tardiness"]["employees"])
+# on-time rate excludes non-standard-schedule employees, same as the policy itself
+standard_emps = [e for e in owner["tardiness"]["employees"] if not e["nonStandardSchedule"]]
+on_time_days = sum(e["daysWorked"] - len(e["lateDays"]) for e in standard_emps)
+total_days = sum(e["daysWorked"] for e in standard_emps)
 
 team = {
     "client": "Atlantic Family Dentistry",
@@ -173,3 +210,4 @@ with open(os.path.join(OUT_DIR, "goals.json"), "w") as f:
     json.dump(goals, f, indent=2)
 
 print("Wrote owner-view.json and team-view.json to", OUT_DIR)
+print(f"On-time rate (standard-schedule employees only): {on_time_days}/{total_days} = {round(on_time_days/total_days*100)}%")

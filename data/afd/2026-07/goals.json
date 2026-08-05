@@ -5,5 +5,14 @@
     "Hygienists": 70000.0
   },
   "addOnGoal": 20000.0,
-  "newPatientsGoal": 40
+  "newPatientsGoal": 40,
+  "tardinessPolicy": {
+    "scheduledStart": "7:50 AM",
+    "lateAfter": "8:10 AM",
+    "lunchWindow": "1:00 PM - 2:00 PM",
+    "lunchMaxMinutes": 60,
+    "nonStandardEmployees": [
+      "Mitchell, Zachary R"
+    ]
+  }
 }

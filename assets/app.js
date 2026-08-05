@@ -224,22 +224,32 @@ function renderFinancialTab(content, periodsObj, pk) {
 
 function renderTardinessTab(content, periodsObj, pk) {
   const d = periodsObj[pk];
+  const pol = d.tardinessPolicy;
   content.appendChild(el("p", { class: "muted" }, document.createTextNode(
     "Admin only - not shown on the team view. " + d.tardiness.methodology
   )));
-  const refRows = Object.entries(d.tardiness.deptMedianArrival).map(([dept, t]) => [dept, t]);
-  content.appendChild(el("h2", {}, document.createTextNode("Department Reference — Typical First Arrival")));
-  content.appendChild(table(["Department", "Median First Arrival"], refRows, [1]));
+
+  content.appendChild(el("h2", {}, document.createTextNode("Policy (set in Settings)")));
+  content.appendChild(table(
+    ["Scheduled Start", "Late After", "Lunch Window", "Lunch Max", "Non-Standard Schedule"],
+    [[pol.scheduledStart, pol.lateAfter, pol.lunchWindow, pol.lunchMaxMinutes + " min", pol.nonStandardEmployees.join(", ") || "&mdash;"]],
+  ));
+
+  if (d.tardiness.note) {
+    content.appendChild(el("p", { class: "muted" }, document.createTextNode(d.tardiness.note)));
+  }
 
   content.appendChild(el("h2", {}, document.createTextNode("Per-Employee Summary")));
   content.appendChild(table(
-    ["Employee", "Dept", "Days Worked", "Median Arrival", "Late Instances", "Worst Instance"],
+    ["Employee", "Dept", "Days Worked", "Schedule", "Late Instances", "Worst Instance", "Lunch Overages"],
     d.tardiness.employees.map(e => {
-      const worst = e.lateDays[0];
-      return [e.employee, e.dept, e.daysWorked, e.medianArrival, e.lateDays.length,
-        worst ? `${worst.time} on ${worst.date} (+${worst.deltaMin}m)` : "&mdash;"];
+      const worst = e.lateDays.length ? e.lateDays.reduce((a, b) => b.deltaMin > a.deltaMin ? b : a) : null;
+      return [e.employee, e.dept, e.daysWorked, e.nonStandardSchedule ? "Non-standard" : "Standard",
+        e.nonStandardSchedule ? "&mdash;" : e.lateDays.length,
+        worst ? `${worst.time} on ${worst.date} (+${worst.deltaMin}m)` : "&mdash;",
+        e.lunchOverages.length];
     }),
-    [2, 4]
+    [2, 4, 6]
   ));
 
   const detailRows = [];
@@ -247,8 +257,17 @@ function renderTardinessTab(content, periodsObj, pk) {
     detailRows.push([e.employee, ld.date, ld.time, `+${ld.deltaMin} min`])
   ));
   if (detailRows.length) {
-    content.appendChild(el("h2", {}, document.createTextNode("Every Flagged Late Arrival")));
+    content.appendChild(el("h2", {}, document.createTextNode("Every Flagged Late Arrival (after " + pol.lateAfter + ")")));
     content.appendChild(table(["Employee", "Date", "Arrival", "Minutes Late"], detailRows, [2, 3]));
+  }
+
+  const lunchRows = [];
+  d.tardiness.employees.forEach(e => e.lunchOverages.forEach(lo =>
+    lunchRows.push([e.employee, lo.date, `${lo.outTime} → ${lo.inTime}`, `${lo.minutes} min`])
+  ));
+  if (lunchRows.length) {
+    content.appendChild(el("h2", {}, document.createTextNode(`Lunch Overages (over ${pol.lunchMaxMinutes} min)`)));
+    content.appendChild(table(["Employee", "Date", "Out → In", "Duration"], lunchRows, [2, 3]));
   }
 }
 
@@ -261,12 +280,23 @@ function renderDaysOffTab(content, periodsObj, pk) {
     d.daysOff.vacation.map(v => [v.employee, v.dept, v.dates, v.days, v.hours.toFixed(1)]),
     [4]
   ));
-  content.appendChild(el("h2", {}, document.createTextNode("No-Punch Gaps")));
+  content.appendChild(el("h2", {}, document.createTextNode("No-Punch Gaps (Active Employees)")));
   content.appendChild(table(
     ["Employee", "Dept", "No-Punch Days", "Note"],
     d.daysOff.noPunchGaps.map(g => [g.employee, g.dept, g.gapDays + "/" + d.daysOff.businessDays, g.note || ""]),
     [2]
   ));
+
+  if (d.daysOff.inactiveEmployees && d.daysOff.inactiveEmployees.length) {
+    content.appendChild(el("h2", {}, document.createTextNode("Inactive Employees (Excluded From Attendance Tracking)")));
+    content.appendChild(el("p", { class: "muted" }, document.createTextNode(
+      "Confirmed inactive - their holiday-pay-only records are a payroll artifact, not an attendance gap."
+    )));
+    content.appendChild(table(
+      ["Employee", "Dept"],
+      d.daysOff.inactiveEmployees.map(g => [g.employee, g.dept]),
+    ));
+  }
 }
 
 // ---------------- ENTRY / UPLOAD ----------------
@@ -472,7 +502,11 @@ async function renderSettingsTab(content, periodsObj, pk) {
   )));
   const goals = (await fetchJSONOrNull(`data/${CLIENT}/${pk}/goals.json`)) || {
     collectionsGoal: 0, departmentGoals: {}, addOnGoal: 0, newPatientsGoal: 0,
+    tardinessPolicy: { scheduledStart: "", lateAfter: "", lunchWindow: "", lunchMaxMinutes: 60, nonStandardEmployees: [] },
   };
+  if (!goals.tardinessPolicy) {
+    goals.tardinessPolicy = { scheduledStart: "", lateAfter: "", lunchWindow: "", lunchMaxMinutes: 60, nonStandardEmployees: [] };
+  }
   const d = periodsObj[pk];
   const depts = [...new Set(d.providers.map(p => p.role === "Dentist" ? "Dentists" : "Hygienists"))];
   depts.forEach(dep => { if (!(dep in goals.departmentGoals)) goals.departmentGoals[dep] = 0; });
@@ -489,6 +523,21 @@ async function renderSettingsTab(content, periodsObj, pk) {
   });
   goalField("Add-On Services Goal", () => goals.addOnGoal, v => goals.addOnGoal = v);
   goalField("New Patients Goal", () => goals.newPatientsGoal, v => goals.newPatientsGoal = v);
+
+  form.appendChild(el("h2", {}, document.createTextNode("Tardiness Baseline")));
+  function textField(label, getVal, setVal) {
+    const input = el("input", { type: "text", value: getVal() });
+    input.addEventListener("input", () => setVal(input.value));
+    form.appendChild(el("div", { class: "field-row" }, [el("label", {}, document.createTextNode(label)), input]));
+  }
+  const pol = goals.tardinessPolicy;
+  textField("Scheduled Start (e.g. 7:50 AM)", () => pol.scheduledStart, v => pol.scheduledStart = v);
+  textField("Not Late Until (e.g. 8:10 AM)", () => pol.lateAfter, v => pol.lateAfter = v);
+  textField("Lunch Window (e.g. 1:00 PM - 2:00 PM)", () => pol.lunchWindow, v => pol.lunchWindow = v);
+  goalField("Lunch Max (minutes)", () => pol.lunchMaxMinutes, v => pol.lunchMaxMinutes = v);
+  textField("Non-Standard-Schedule Employees (comma-separated)",
+    () => pol.nonStandardEmployees.join(", "),
+    v => pol.nonStandardEmployees = v.split(",").map(s => s.trim()).filter(Boolean));
 
   const dlBtn = el("button", { class: "primary-btn", onclick: () => downloadJSON(goals, "goals.json") },
     document.createTextNode("Download goals.json"));
