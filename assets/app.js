@@ -1,41 +1,67 @@
+// ==================================================================
+// Keep Metrics - three view tiers (admin / manager / team).
+// Each tier is a separately-encrypted payload; the security boundary
+// is which key decrypts, not a client-side role flag. See README for
+// the (honest) limits of client-side re-encryption on a static host.
+// ==================================================================
+const LEVELS = ["admin", "manager", "team"]; // richest first
+const LEVEL_LABEL = { admin: "Admin (Doctor)", manager: "Manager", team: "Team" };
+const LEVEL_BADGE = { admin: "badge-admin", manager: "badge-manager", team: "badge-team" };
+
+let session = null; // { level, password, periods:{pk:data} }
+
+// ---------- formatting ----------
 const money = (v, parens = true) => {
   v = Number(v) || 0;
   const s = "$" + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return v < 0 ? (parens ? `(${s})` : `-${s}`) : s;
 };
-const pct = (v) => (v === null || v === undefined ? "&mdash;" : Number(v).toFixed(0) + "%");
+const money0 = (v) => "$" + Math.round(Number(v) || 0).toLocaleString();
+const pctStr = (v) => (v === null || v === undefined ? "&mdash;" : Math.round(v) + "%");
 
-let session = null; // { level, password, periods: {periodKey: dataObject} }
+// on-time / rate color band
+function rateClass(onTimePct) {
+  if (onTimePct === null || onTimePct === undefined) return "rate-na";
+  if (onTimePct >= 95) return "rate-good";
+  if (onTimePct >= 85) return "rate-ok";
+  return "rate-bad";
+}
 
+// ---------- fetch ----------
 async function fetchJSON(path) {
   const res = await fetch(path, { cache: "no-store" });
   if (!res.ok) throw new Error("missing " + path);
   return res.json();
 }
-async function fetchJSONOrNull(path) {
-  try { return await fetchJSON(path); } catch (e) { return null; }
-}
+async function fetchJSONOrNull(path) { try { return await fetchJSON(path); } catch (e) { return null; } }
+
+// ---- local edits: a manager's "Save" persists here instantly (no keys, no
+// download). Publishing to the live site for everyone else is the separate
+// server/MIA step (see README). Keyed with a schema version so a stale edit
+// from an older layout can't break rendering.
+const OV = "km_v2";
+const ovKey = (period, level) => `${OV}_${CLIENT}_${period}_${level}`;
+function loadOverride(period, level) { try { const v = localStorage.getItem(ovKey(period, level)); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+function saveOverride(period, level, data) { try { localStorage.setItem(ovKey(period, level), JSON.stringify(data)); } catch (e) {} }
 
 async function attemptLogin(password) {
   const manifest = await fetchJSON(`data/manifest.json`);
-  const periods = (manifest.periods && manifest.periods[CLIENT]) || [];
-  periods.sort();
-
-  for (const level of ["owner", "team"]) {
+  const periods = ((manifest.periods && manifest.periods[CLIENT]) || []).slice().sort();
+  for (const level of LEVELS) {
     const decrypted = {};
     let any = false;
     for (const period of periods) {
-      try {
-        const envelope = await fetchJSON(`data/${CLIENT}/${period}/${level}-view.json.enc`);
-        const data = await tryDecrypt(envelope, password);
-        if (data) { decrypted[period] = data; any = true; }
-      } catch (e) { /* file missing for this period at this level - skip */ }
+      const envelope = await fetchJSONOrNull(`data/${CLIENT}/${period}/${level}-view.json.enc`);
+      if (!envelope) continue;
+      const data = await tryDecrypt(envelope, password);
+      if (data) { decrypted[period] = loadOverride(period, level) || data; any = true; }
     }
     if (any) return { level, password, periods: decrypted };
   }
   return null;
 }
 
+// ---------- DOM helpers ----------
 function el(tag, attrs = {}, children = []) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -43,173 +69,142 @@ function el(tag, attrs = {}, children = []) {
     else if (k.startsWith("on") && typeof v === "function") e.addEventListener(k.slice(2), v);
     else e.setAttribute(k, v);
   }
-  (Array.isArray(children) ? children : [children]).forEach(c => c && e.appendChild(c));
+  (Array.isArray(children) ? children : [children]).forEach(c => {
+    if (c === null || c === undefined) return;
+    e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  });
   return e;
 }
+const T = (s) => document.createTextNode(s);
 
-function kpiCard(label, value, color) {
-  return el("div", { class: "kpi", style: `background:${color}` }, [
-    el("div", { class: "lbl" }, document.createTextNode(label)),
-    el("div", { class: "val", html: value }),
+function statCard(label, value, color, sub) {
+  return el("div", { class: "kpi", style: `border-top-color:${color}` }, [
+    el("div", { class: "lbl" }, T(label)),
+    el("div", { class: "val", style: `color:${color}`, html: value }),
+    sub ? el("div", { class: "kpi-sub", html: sub }) : null,
   ]);
+}
+
+function rateChip(onTimePct, lateCount, daysWorked) {
+  const cls = rateClass(onTimePct);
+  const label = onTimePct === null ? "&mdash;" : `${onTimePct}% on-time`;
+  return el("span", { class: `chip ${cls}`, html: label + (onTimePct !== null ? ` <span class="chip-sub">(${lateCount}/${daysWorked} late)</span>` : "") });
 }
 
 function table(headers, rows, alignRight = []) {
   const t = el("table");
-  const thead = el("tr", {}, headers.map((h, i) => el("th", { style: alignRight.includes(i) ? "text-align:right" : "" }, document.createTextNode(h))));
-  t.appendChild(el("thead", {}, thead));
-  const tbody = el("tbody");
-  rows.forEach(r => {
-    tbody.appendChild(el("tr", {}, r.map((c, i) => el("td", { class: alignRight.includes(i) ? "num" : "", html: String(c) }))));
-  });
-  t.appendChild(tbody);
+  t.appendChild(el("thead", {}, el("tr", {}, headers.map((h, i) =>
+    el("th", { style: alignRight.includes(i) ? "text-align:right" : "" }, T(h))))));
+  const tb = el("tbody");
+  rows.forEach(r => tb.appendChild(el("tr", {}, r.map((c, i) => {
+    const cls = alignRight.includes(i) ? "num" : "";
+    return (c && c.nodeType) ? el("td", { class: cls }, c) : el("td", { class: cls, html: String(c) });
+  }))));
+  t.appendChild(tb);
   return t;
 }
 
-function latestPeriod(periodsObj) {
-  const keys = Object.keys(periodsObj).sort();
-  return keys[keys.length - 1];
+function goalBar(label, actual, goal, fmt) {
+  const p = goal ? Math.round(actual / goal * 100) : 0;
+  const shown = Math.min(100, p);
+  const color = p >= 100 ? "var(--green)" : p >= 75 ? "var(--steel)" : "var(--amber)";
+  return el("div", { class: "goalbar" }, [
+    el("div", { class: "goalbar-label" }, [
+      el("span", {}, T(label)),
+      el("span", { class: "goalbar-fig" }, T(`${fmt(actual)} / ${fmt(goal)} · ${p}%`)),
+    ]),
+    el("div", { class: "goalbar-track" }, el("div", { class: "goalbar-fill", style: `width:${shown}%;background:${color}` })),
+  ]);
 }
 
-function goalBar(label, actual, goal, formatFn) {
-  const pctOf = goal ? Math.min(100, Math.round(actual / goal * 100)) : 0;
-  const color = pctOf >= 100 ? "var(--green)" : pctOf >= 75 ? "var(--steel)" : "var(--amber)";
-  const wrap = el("div", { class: "goalbar" });
-  wrap.appendChild(el("div", { class: "goalbar-label" }, document.createTextNode(
-    `${label} — ${formatFn(actual)} of ${formatFn(goal)} goal (${pctOf}%)`
-  )));
-  const track = el("div", { class: "goalbar-track" });
-  track.appendChild(el("div", { class: "goalbar-fill", style: `width:${pctOf}%;background:${color}` }));
-  wrap.appendChild(track);
-  return wrap;
-}
-
-function brandRow() {
-  return el("div", { class: "app-brand" }, el("img", { src: "assets/ask-logo-color.png", alt: "ASK System" }));
-}
+function sectionHead(txt) { return el("h2", {}, T(txt)); }
+function brandRow() { return el("div", { class: "app-brand" }, el("img", { src: "assets/ask-logo-color.png", alt: "ASK System" })); }
+function latest(periodsObj) { const k = Object.keys(periodsObj).sort(); return k[k.length - 1]; }
 
 // ==================================================================
-// OWNER VIEW — tabbed: Financial / Tardiness / Days Off / Entry / Settings
+// FULL REPORT (admin + manager) - tabbed
 // ==================================================================
-const OWNER_TABS = ["Financial", "Tardiness", "Days Off", "Entry / Upload", "Settings"];
-
-function renderOwner(container, periodsObj, password) {
+function renderFull(container, periodsObj, level, password) {
   container.innerHTML = "";
   container.appendChild(brandRow());
-
-  const pk = latestPeriod(periodsObj);
+  const pk = latest(periodsObj);
   const d = periodsObj[pk];
 
   const header = el("div", { class: "app-header" }, [
-    el("h1", {}, document.createTextNode(d.client)),
-    el("button", { class: "logout", onclick: () => location.reload() }, document.createTextNode("Log out")),
+    el("h1", {}, T(d.client)),
+    el("button", { class: "logout", onclick: () => location.reload() }, T("Log out")),
   ]);
   container.appendChild(header);
-  container.appendChild(el("span", { class: "badge owner" }, document.createTextNode("Owner / Full Report")));
-  container.appendChild(el("p", { class: "subline" }, document.createTextNode(`${d.period} · Prepared ${d.prepared}`)));
+  container.appendChild(el("span", { class: `badge ${LEVEL_BADGE[level]}` }, T(LEVEL_LABEL[level])));
+  container.appendChild(el("p", { class: "subline" }, T(`${d.period} · Prepared ${d.prepared}`)));
 
+  const tabs = ["Financial", "Team Health", "Days Off", "Entry / Upload"];
+  if (level === "admin") tabs.push("Settings");
+  const renderers = {
+    "Financial": renderFinancial, "Team Health": renderTeamHealthTab,
+    "Days Off": renderDaysOff, "Entry / Upload": (c, p, k) => renderEntry(c, p, k, level, password),
+    "Settings": renderSettings,
+  };
   const tabBar = el("div", { class: "tabbar" });
   const content = el("div", { class: "tabcontent" });
-  container.appendChild(tabBar);
-  container.appendChild(content);
-
-  const renderers = {
-    "Financial": renderFinancialTab,
-    "Tardiness": renderTardinessTab,
-    "Days Off": renderDaysOffTab,
-    "Entry / Upload": renderEntryTab,
-    "Settings": renderSettingsTab,
-  };
-
-  function selectTab(name) {
+  container.append(tabBar, content);
+  function select(name) {
     [...tabBar.children].forEach(b => b.classList.toggle("active", b.dataset.tab === name));
     content.innerHTML = "";
-    renderers[name](content, periodsObj, pk, password);
+    renderers[name](content, periodsObj, pk);
   }
-
-  OWNER_TABS.forEach((name, i) => {
-    const btn = el("button", { class: "tabbtn", "data-tab": name, onclick: () => selectTab(name) }, document.createTextNode(name));
-    tabBar.appendChild(btn);
-  });
-  selectTab(OWNER_TABS[0]);
+  tabs.forEach(name => tabBar.appendChild(el("button", { class: "tabbtn", "data-tab": name, onclick: () => select(name) }, T(name))));
+  select("Financial");
 }
 
-function renderFinancialTab(content, periodsObj, pk) {
+function renderFinancial(content, periodsObj, pk) {
   const d = periodsObj[pk];
   const patientAged = d.patientAging.d31_60 + d.patientAging.d61_90 + d.patientAging.over90;
-  const insAged = (d.insuranceAging.primary.d31_60 + d.insuranceAging.primary.d61_90 + d.insuranceAging.primary.over90)
-                + (d.insuranceAging.secondary.d31_60 + d.insuranceAging.secondary.d61_90 + d.insuranceAging.secondary.over90);
-  const collRate = d.performance.current.production ? (d.performance.current.collections / d.performance.current.production * 100) : 0;
+  const insAged = ["d31_60", "d61_90", "over90"].reduce((a, k) => a + d.insuranceAging.primary[k] + d.insuranceAging.secondary[k], 0);
+  const collRate = d.performance.current.production ? d.performance.current.collections / d.performance.current.production * 100 : 0;
+  const prodChange = d.performance.prior.production ? (d.performance.current.production - d.performance.prior.production) / d.performance.prior.production * 100 : null;
 
   content.appendChild(el("div", { class: "kpis" }, [
-    kpiCard("Production", money(d.performance.current.production, false), "var(--steel)"),
-    kpiCard("Collections", money(d.performance.current.collections, false), "var(--green)"),
-    kpiCard("Collection Rate", pct(collRate), "var(--navy)"),
-    kpiCard("Actionable AR (31+ days)", money(patientAged + insAged, false), "var(--red)"),
+    statCard("Production", money0(d.performance.current.production), "var(--steel)", prodChange === null ? "" : `${prodChange >= 0 ? "▲" : "▼"} ${Math.abs(prodChange).toFixed(1)}% vs prior`),
+    statCard("Collections", money0(d.performance.current.collections), "var(--green)", ""),
+    statCard("Collection Rate", pctStr(collRate), "var(--navy)", "MTD"),
+    statCard("Actionable A/R", money0(patientAged + insAged), "var(--red)", "31+ days, patient + insurance"),
   ]));
 
-  const perfSection = el("div", { class: "section" });
-  perfSection.appendChild(el("h2", {}, document.createTextNode("Practice Performance")));
-  perfSection.appendChild(table(
+  content.appendChild(sectionHead("Practice Performance"));
+  content.appendChild(table(
     ["Metric", "This Period", "Prior Period", "YTD"],
     [
       ["Gross Production", money(d.performance.current.production, false), money(d.performance.prior.production, false), money(d.performance.ytd.production, false)],
       ["Net Collections", money(d.performance.current.collections, false), money(d.performance.prior.collections, false), money(d.performance.ytd.collections, false)],
       ["Ending A/R Balance", money(d.performance.current.arBalance), "&mdash;", "&mdash;"],
-    ], [1, 2, 3]
-  ));
-  content.appendChild(perfSection);
+    ], [1, 2, 3]));
 
-  const provSection = el("div", { class: "section" });
-  provSection.appendChild(el("h2", {}, document.createTextNode("Provider Productivity")));
-  provSection.appendChild(el("div", { class: "chart-box" }, el("canvas", { id: "providerChart" })));
-  provSection.appendChild(table(
+  content.appendChild(sectionHead("Provider Productivity"));
+  content.appendChild(el("div", { class: "chart-box" }, el("canvas", { id: "provChart" })));
+  content.appendChild(table(
     ["Name", "Role", "Production", "Adjustments", "Collections", "Coll. Rate"],
     d.providers.map(p => [p.name, p.role, money(p.production, false), money(p.adjustments, false), money(p.collections, false), p.collRate + "%"]),
-    [2, 3, 4, 5]
-  ));
-  content.appendChild(provSection);
+    [2, 3, 4, 5]));
 
-  const newPatSection = el("div", { class: "section" });
-  newPatSection.appendChild(el("h2", {}, document.createTextNode("New Patients & Add-On Services")));
-  newPatSection.appendChild(el("p", {}, document.createTextNode(`New patients this period: ${d.newPatients.actual}`)));
-  newPatSection.appendChild(table(
-    ["Add-On Service", "Production"],
-    d.addOnServices.map(a => [a.name, money(a.production, false)]),
-    [1]
-  ));
-  content.appendChild(newPatSection);
+  content.appendChild(sectionHead("New Patients & Add-On Services"));
+  content.appendChild(el("p", { class: "inline-stat" }, [el("b", {}, T(String(d.newPatients.actual))), T(" new patients this period")]));
+  content.appendChild(table(["Add-On Service", "Production"], d.addOnServices.map(a => [a.name, money(a.production, false)]), [1]));
 
-  const arSection = el("div", { class: "section" });
-  arSection.appendChild(el("h2", {}, document.createTextNode("Accounts Receivable Health")));
-  arSection.appendChild(el("p", {}, document.createTextNode("Patient/Guarantor Aging")));
-  arSection.appendChild(table(
+  content.appendChild(sectionHead("Accounts Receivable Health"));
+  content.appendChild(el("p", { class: "sub-label" }, T("Patient / Guarantor Aging")));
+  content.appendChild(table(
     ["Current (0-30)", "31-60", "61-90", "Over 90", "Est. Ins. Owed", "Guarantor Portion"],
-    [[money(d.patientAging.current), money(d.patientAging.d31_60, false), money(d.patientAging.d61_90, false),
-      money(d.patientAging.over90, false), money(d.patientAging.insEst, false), money(d.patientAging.guarPortion)]],
-    [0, 1, 2, 3, 4, 5]
-  ));
-  arSection.appendChild(el("p", { class: "muted" }, document.createTextNode(
-    `Real aged patient debt (31+ days): ${money(patientAged, false)}. Aged insurance claims (31+ days): ${money(insAged, false)}.`
-  )));
-  arSection.appendChild(el("h2", {}, document.createTextNode("Largest Aged Insurance Claims")));
-  arSection.appendChild(table(
-    ["Patient", "Payer", "Bucket", "Amount"],
-    d.agedClaims.map(c => [c.patient, c.payer, c.bucket, money(c.amount, false)]),
-    [3]
-  ));
-  content.appendChild(arSection);
+    [[money(d.patientAging.current), money(d.patientAging.d31_60, false), money(d.patientAging.d61_90, false), money(d.patientAging.over90, false), money(d.patientAging.insEst, false), money(d.patientAging.guarPortion)]],
+    [0, 1, 2, 3, 4, 5]));
+  content.appendChild(el("p", { class: "muted" }, T(`Real aged patient debt (31+ days): ${money(patientAged, false)}. Aged insurance claims (31+ days): ${money(insAged, false)}.`)));
+  content.appendChild(el("p", { class: "sub-label" }, T("Largest Aged Insurance Claims")));
+  content.appendChild(table(["Patient", "Payer", "Bucket", "Amount"], d.agedClaims.map(c => [c.patient, c.payer, c.bucket, money(c.amount, false)]), [3]));
 
-  const laborSection = el("div", { class: "section" });
-  laborSection.appendChild(el("h2", {}, document.createTextNode("Labor & Staffing")));
-  laborSection.appendChild(table(
-    ["Department", "Staff", "Hours", "Notes"],
-    d.labor.map(l => [l.dept, l.staffCount, l.hours, l.notes || ""]),
-    [1, 2]
-  ));
-  content.appendChild(laborSection);
+  content.appendChild(sectionHead("Labor & Staffing"));
+  content.appendChild(table(["Department", "Staff", "Hours", "Notes"], d.labor.map(l => [l.dept, l.staffCount, l.hours, l.notes || ""]), [1, 2]));
 
-  new Chart(document.getElementById("providerChart"), {
+  new Chart(document.getElementById("provChart"), {
     type: "bar",
     data: {
       labels: d.providers.map(p => p.name),
@@ -222,374 +217,357 @@ function renderFinancialTab(content, periodsObj, pk) {
   });
 }
 
-function renderTardinessTab(content, periodsObj, pk) {
+// ---------------- TEAM HEALTH (was Tardiness) ----------------
+function renderTeamHealthTab(content, periodsObj, pk) {
   const d = periodsObj[pk];
-  const pol = d.tardinessPolicy;
-  content.appendChild(el("p", { class: "muted" }, document.createTextNode(
-    "Admin only - not shown on the team view. " + d.tardiness.methodology
+  const th = d.teamHealth;
+  const pol = th.policy;
+  const emps = th.employees.slice().sort((a, b) => {
+    // worst on-time first, non-standard last
+    if (a.nonStandardSchedule !== b.nonStandardSchedule) return a.nonStandardSchedule ? 1 : -1;
+    return (a.onTimePct ?? 999) - (b.onTimePct ?? 999);
+  });
+  const flagged = emps.filter(e => !e.nonStandardSchedule && (e.lateCount > 0 || e.lunchOverageCount > 0)).length;
+  const perfect = emps.filter(e => !e.nonStandardSchedule && e.lateCount === 0 && e.lunchOverageCount === 0).length;
+
+  content.appendChild(el("div", { class: "kpis" }, [
+    statCard("Team On-Time Rate", th.onTimeRatePct + "%", "var(--navy)", "standard-schedule staff"),
+    statCard("Perfect Attendance", String(perfect), "var(--green)", "0 late, 0 lunch overage"),
+    statCard("Staff With Flags", String(flagged), flagged ? "var(--amber)" : "var(--green)", "late or long-lunch this period"),
+  ]));
+
+  content.appendChild(el("p", { class: "muted" }, T(
+    "Admin & manager only - the team screen sees on-time rate by department, never individual names. " +
+    "This is the team-health half of Keep Metrics (financial health is the other) - tracked monthly, it trends into a per-person performance picture."
   )));
 
-  content.appendChild(el("h2", {}, document.createTextNode("Policy (set in Settings)")));
+  content.appendChild(sectionHead("Attendance Policy (set in Settings)"));
   content.appendChild(table(
-    ["Scheduled Start", "Late After", "Lunch Window", "Lunch Max", "Non-Standard Schedule"],
-    [[pol.scheduledStart, pol.lateAfter, pol.lunchWindow, pol.lunchMaxMinutes + " min", pol.nonStandardEmployees.join(", ") || "&mdash;"]],
-  ));
+    ["Scheduled Start", "Late After", "Lunch Window", "Lunch Max", "On-Time Goal", "Non-Standard"],
+    [[pol.scheduledStart, pol.lateAfter, pol.lunchWindow, pol.lunchMaxMinutes + " min", "95%", pol.nonStandardEmployees.join(", ") || "&mdash;"]]));
 
-  if (d.tardiness.note) {
-    content.appendChild(el("p", { class: "muted" }, document.createTextNode(d.tardiness.note)));
-  }
-
-  content.appendChild(el("h2", {}, document.createTextNode("Per-Employee Summary")));
+  content.appendChild(sectionHead("Per-Employee Scorecard"));
   content.appendChild(table(
-    ["Employee", "Dept", "Days Worked", "Schedule", "Late Instances", "Worst Instance", "Lunch Overages"],
-    d.tardiness.employees.map(e => {
+    ["Employee", "Dept", "Days", "On-Time", "Late", "Lunch Overages", "Worst Late"],
+    emps.map(e => {
       const worst = e.lateDays.length ? e.lateDays.reduce((a, b) => b.deltaMin > a.deltaMin ? b : a) : null;
-      return [e.employee, e.dept, e.daysWorked, e.nonStandardSchedule ? "Non-standard" : "Standard",
-        e.nonStandardSchedule ? "&mdash;" : e.lateDays.length,
-        worst ? `${worst.time} on ${worst.date} (+${worst.deltaMin}m)` : "&mdash;",
-        e.lunchOverages.length];
+      return [
+        e.employee, e.dept, e.daysWorked,
+        e.nonStandardSchedule ? el("span", { class: "chip rate-na" }, T("non-standard")) : rateChip(e.onTimePct, e.lateCount, e.daysWorked),
+        e.nonStandardSchedule ? "&mdash;" : e.lateCount,
+        e.lunchOverageCount,
+        worst ? `${worst.time} · ${worst.date} (+${worst.deltaMin}m)` : "&mdash;",
+      ];
     }),
-    [2, 4, 6]
-  ));
+    [2, 4, 5]));
 
-  const detailRows = [];
-  d.tardiness.employees.forEach(e => e.lateDays.forEach(ld =>
-    detailRows.push([e.employee, ld.date, ld.time, `+${ld.deltaMin} min`])
-  ));
-  if (detailRows.length) {
-    content.appendChild(el("h2", {}, document.createTextNode("Every Flagged Late Arrival (after " + pol.lateAfter + ")")));
-    content.appendChild(table(["Employee", "Date", "Arrival", "Minutes Late"], detailRows, [2, 3]));
+  if (th.note) content.appendChild(el("p", { class: "callout" }, [el("b", {}, T("Pattern: ")), T(th.note)]));
+
+  const lateRows = [];
+  emps.forEach(e => e.lateDays.forEach(l => lateRows.push([e.employee, l.date, l.time, `+${l.deltaMin} min`])));
+  if (lateRows.length) {
+    content.appendChild(sectionHead(`Every Late Arrival (after ${pol.lateAfter})`));
+    content.appendChild(table(["Employee", "Date", "Arrival", "Minutes Late"], lateRows, [3]));
   }
-
   const lunchRows = [];
-  d.tardiness.employees.forEach(e => e.lunchOverages.forEach(lo =>
-    lunchRows.push([e.employee, lo.date, `${lo.outTime} → ${lo.inTime}`, `${lo.minutes} min`])
-  ));
+  emps.forEach(e => e.lunchOverages.forEach(l => lunchRows.push([e.employee, l.date, `${l.outTime} → ${l.inTime}`, `${l.minutes} min`])));
   if (lunchRows.length) {
-    content.appendChild(el("h2", {}, document.createTextNode(`Lunch Overages (over ${pol.lunchMaxMinutes} min)`)));
-    content.appendChild(table(["Employee", "Date", "Out → In", "Duration"], lunchRows, [2, 3]));
+    content.appendChild(sectionHead(`Lunch Overages (over ${pol.lunchMaxMinutes} min)`));
+    content.appendChild(table(["Employee", "Date", "Out → In", "Duration"], lunchRows, [3]));
   }
 }
 
-function renderDaysOffTab(content, periodsObj, pk) {
+// ---------------- DAYS OFF (no inactive section) ----------------
+function renderDaysOff(content, periodsObj, pk) {
   const d = periodsObj[pk];
-  content.appendChild(el("p", { class: "muted" }, document.createTextNode("Admin only - not shown on the team view.")));
-  content.appendChild(el("h2", {}, document.createTextNode("Vacation Taken")));
-  content.appendChild(table(
-    ["Employee", "Dept", "Dates", "Days", "Hours"],
-    d.daysOff.vacation.map(v => [v.employee, v.dept, v.dates, v.days, v.hours.toFixed(1)]),
-    [4]
-  ));
-  content.appendChild(el("h2", {}, document.createTextNode("No-Punch Gaps (Active Employees)")));
-  content.appendChild(table(
-    ["Employee", "Dept", "No-Punch Days", "Note"],
-    d.daysOff.noPunchGaps.map(g => [g.employee, g.dept, g.gapDays + "/" + d.daysOff.businessDays, g.note || ""]),
-    [2]
-  ));
-
-  if (d.daysOff.inactiveEmployees && d.daysOff.inactiveEmployees.length) {
-    content.appendChild(el("h2", {}, document.createTextNode("Inactive Employees (Excluded From Attendance Tracking)")));
-    content.appendChild(el("p", { class: "muted" }, document.createTextNode(
-      "Confirmed inactive - their holiday-pay-only records are a payroll artifact, not an attendance gap."
-    )));
-    content.appendChild(table(
-      ["Employee", "Dept"],
-      d.daysOff.inactiveEmployees.map(g => [g.employee, g.dept]),
-    ));
-  }
+  content.appendChild(el("p", { class: "muted" }, T("Admin & manager only - not shown on the team screen.")));
+  content.appendChild(sectionHead("Vacation Taken"));
+  content.appendChild(table(["Employee", "Dept", "Dates", "Days", "Hours"],
+    d.daysOff.vacation.map(v => [v.employee, v.dept, v.dates, v.days, v.hours.toFixed(1)]), [4]));
+  content.appendChild(sectionHead("No-Punch Gaps (Active Employees)"));
+  content.appendChild(table(["Employee", "Dept", "No-Punch Days", "Note"],
+    d.daysOff.noPunchGaps.map(g => [g.employee, g.dept, g.gapDays + "/" + d.daysOff.businessDays, g.note || ""]), [2]));
 }
 
-// ---------------- ENTRY / UPLOAD ----------------
-function renderEntryTab(content, periodsObj, pk, password) {
-  const d = JSON.parse(JSON.stringify(periodsObj[pk])); // working copy
+// ---------------- ENTRY WIZARD (admin + manager) ----------------
+function renderEntry(content, periodsObj, pk, level, password) {
+  const d = JSON.parse(JSON.stringify(periodsObj[pk]));
+  const set = (path, val) => { const p = path.split("."); let c = d; for (let i = 0; i < p.length - 1; i++) c = c[p[i]]; c[p[p.length - 1]] = val; };
+  const numField = (label, path, val) => {
+    const i = el("input", { type: "number", step: "0.01", value: val });
+    i.addEventListener("input", () => set(path, parseFloat(i.value) || 0));
+    return el("div", { class: "field-row" }, [el("label", {}, T(label)), i]);
+  };
+  const grid = (fields) => el("div", { class: "field-grid" }, fields);
 
-  const introRow = el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:4px;" });
-  const infoIcon = el("button", { class: "info-icon", type: "button", title: "Instructions", "aria-label": "Instructions" }, document.createTextNode("i"));
-  infoIcon.addEventListener("click", () => document.getElementById("infoModal").classList.add("visible"));
-  introRow.appendChild(infoIcon);
-  introRow.appendChild(el("span", { class: "muted" }, document.createTextNode(
-    "Covers the numbers off Dentrix report totals. Tardiness and days-off come separately, straight from the " +
-    "doctor - this form edits and re-publishes " + d.period + ". Click the info icon for the report checklist."
-  )));
-  content.appendChild(introRow);
-
-  const form = el("div", { class: "entry-form" });
-
-  function numField(label, path, value) {
-    const input = el("input", { type: "number", step: "0.01", value: value });
-    input.addEventListener("input", () => setPath(d, path, parseFloat(input.value) || 0));
-    return el("div", { class: "field-row" }, [el("label", {}, document.createTextNode(label)), input]);
-  }
-  function setPath(obj, path, val) {
-    const parts = path.split(".");
-    let cur = obj;
-    for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
-    cur[parts[parts.length - 1]] = val;
-  }
-
-  form.appendChild(el("h2", {}, document.createTextNode("Practice Performance")));
-  form.appendChild(numField("Gross Production", "performance.current.production", d.performance.current.production));
-  form.appendChild(numField("Production Adjustments (+)", "performance.current.prodAdj", d.performance.current.prodAdj));
-  form.appendChild(numField("Net Collections", "performance.current.collections", d.performance.current.collections));
-  form.appendChild(numField("Ending A/R Balance", "performance.current.arBalance", d.performance.current.arBalance));
-  form.appendChild(numField("Prior Period Production", "performance.prior.production", d.performance.prior.production));
-  form.appendChild(numField("Prior Period Collections", "performance.prior.collections", d.performance.prior.collections));
-  form.appendChild(numField("YTD Production", "performance.ytd.production", d.performance.ytd.production));
-  form.appendChild(numField("YTD Collections", "performance.ytd.collections", d.performance.ytd.collections));
-
-  form.appendChild(el("h2", {}, document.createTextNode("New Patients")));
-  form.appendChild(numField("New Patients This Period", "newPatients.actual", d.newPatients.actual));
-
-  form.appendChild(el("h2", {}, document.createTextNode("Patient/Guarantor Aging — from Dentrix Aging Report")));
-  form.appendChild(numField("Current (0-30)", "patientAging.current", d.patientAging.current));
-  form.appendChild(numField("31-60 Days", "patientAging.d31_60", d.patientAging.d31_60));
-  form.appendChild(numField("61-90 Days", "patientAging.d61_90", d.patientAging.d61_90));
-  form.appendChild(numField("Over 90 Days", "patientAging.over90", d.patientAging.over90));
-  form.appendChild(numField("Est. Insurance Owed", "patientAging.insEst", d.patientAging.insEst));
-  form.appendChild(numField("Guarantor Portion", "patientAging.guarPortion", d.patientAging.guarPortion));
-
-  form.appendChild(el("h2", {}, document.createTextNode("Insurance Claims Aging — from Dentrix Insurance Aging Report")));
-  form.appendChild(numField("Primary — Current", "insuranceAging.primary.current", d.insuranceAging.primary.current));
-  form.appendChild(numField("Primary — 31-60", "insuranceAging.primary.d31_60", d.insuranceAging.primary.d31_60));
-  form.appendChild(numField("Primary — 61-90", "insuranceAging.primary.d61_90", d.insuranceAging.primary.d61_90));
-  form.appendChild(numField("Primary — Over 90", "insuranceAging.primary.over90", d.insuranceAging.primary.over90));
-  form.appendChild(numField("Secondary — Current", "insuranceAging.secondary.current", d.insuranceAging.secondary.current));
-  form.appendChild(numField("Secondary — 31-60", "insuranceAging.secondary.d31_60", d.insuranceAging.secondary.d31_60));
-  form.appendChild(numField("Secondary — 61-90", "insuranceAging.secondary.d61_90", d.insuranceAging.secondary.d61_90));
-  form.appendChild(numField("Secondary — Over 90", "insuranceAging.secondary.over90", d.insuranceAging.secondary.over90));
-  form.appendChild(el("p", { class: "muted" }, document.createTextNode(
-    "Largest aged claims, tardiness, and days-off still come from the raw Dentrix export via the parser scripts - " +
-    "those are per-line/per-punch detail that isn't practical to hand-type. See the Dentrix Report Checklist."
-  )));
-
-  form.appendChild(el("h2", {}, document.createTextNode("Add-On Services")));
-  const addOnBox = el("div", { id: "addOnBox" });
-  function renderAddOns() {
-    addOnBox.innerHTML = "";
-    d.addOnServices.forEach((a, i) => {
-      const nameInput = el("input", { value: a.name, placeholder: "Service name" });
-      nameInput.addEventListener("input", () => d.addOnServices[i].name = nameInput.value);
-      const prodInput = el("input", { type: "number", step: "0.01", value: a.production });
-      prodInput.addEventListener("input", () => d.addOnServices[i].production = parseFloat(prodInput.value) || 0);
-      const rmBtn = el("button", { class: "rm-btn", onclick: () => { d.addOnServices.splice(i, 1); renderAddOns(); } }, document.createTextNode("×"));
-      addOnBox.appendChild(el("div", { class: "field-row" }, [nameInput, prodInput, rmBtn]));
-    });
-  }
-  renderAddOns();
-  form.appendChild(addOnBox);
-  form.appendChild(el("button", { class: "add-btn", onclick: () => { d.addOnServices.push({ name: "", production: 0 }); renderAddOns(); } },
-    document.createTextNode("+ Add service")));
-
-  form.appendChild(el("h2", {}, document.createTextNode("Providers")));
-  form.appendChild(el("p", { class: "muted" }, document.createTextNode("Type them in below, or upload a CSV (provider_name, provider_role, gross_production, adjustments, net_collections).")));
-  const csvInput = el("input", { type: "file", accept: ".csv" });
-  csvInput.addEventListener("change", (ev) => handleCSVUpload(ev, d, renderProviders));
-  form.appendChild(csvInput);
-  const provBox = el("div", { id: "provBox" });
-  function renderProviders() {
-    provBox.innerHTML = "";
-    d.providers.forEach((p, i) => {
-      const nameInput = el("input", { value: p.name, placeholder: "Name" });
-      nameInput.addEventListener("input", () => d.providers[i].name = nameInput.value);
-      const roleInput = el("input", { value: p.role, placeholder: "Role" });
-      roleInput.addEventListener("input", () => d.providers[i].role = roleInput.value);
-      const prodInput = el("input", { type: "number", step: "0.01", value: p.production });
-      prodInput.addEventListener("input", () => d.providers[i].production = parseFloat(prodInput.value) || 0);
-      const adjInput = el("input", { type: "number", step: "0.01", value: p.adjustments });
-      adjInput.addEventListener("input", () => d.providers[i].adjustments = parseFloat(adjInput.value) || 0);
-      const collInput = el("input", { type: "number", step: "0.01", value: p.collections });
-      collInput.addEventListener("input", () => d.providers[i].collections = parseFloat(collInput.value) || 0);
-      const rmBtn = el("button", { class: "rm-btn", onclick: () => { d.providers.splice(i, 1); renderProviders(); } }, document.createTextNode("×"));
-      provBox.appendChild(el("div", { class: "field-row provider-row" }, [nameInput, roleInput, prodInput, adjInput, collInput, rmBtn]));
-    });
-  }
-  renderProviders();
-  form.appendChild(provBox);
-  form.appendChild(el("button", { class: "add-btn", onclick: () => { d.providers.push({ name: "", role: "", production: 0, adjustments: 0, collections: 0, collRate: 0 }); renderProviders(); } },
-    document.createTextNode("+ Add provider")));
-
-  const statusEl = el("div", { class: "gate-error" });
-  const genBtn = el("button", { class: "primary-btn" }, document.createTextNode("Generate & Download Updated Files"));
-  genBtn.addEventListener("click", async () => {
-    statusEl.textContent = "Encrypting...";
-    try {
-      d.providers.forEach(p => p.collRate = p.production ? Math.round(p.collections / p.production * 100) : 0);
-      const dept_totals = {};
-      d.providers.forEach(p => {
-        const dept = p.role === "Dentist" ? "Dentists" : "Hygienists";
-        dept_totals[dept] = dept_totals[dept] || { production: 0, collections: 0 };
-        dept_totals[dept].production += p.production;
-        dept_totals[dept].collections += p.collections;
+  // ---- step bodies ----
+  const stepPerformance = (body) => {
+    body.appendChild(el("p", { class: "wiz-hint" }, [
+      el("button", { class: "info-icon", type: "button", title: "Which Dentrix reports", onclick: () => document.getElementById("infoModal").classList.add("visible") }, T("i")),
+      el("span", {}, T("From the Provider A/R Totals report — the TOTAL row and its Prev. Month / YTD columns.")),
+    ]));
+    body.appendChild(grid([
+      numField("Gross Production", "performance.current.production", d.performance.current.production),
+      numField("Net Collections", "performance.current.collections", d.performance.current.collections),
+      numField("Production Adjustments (+)", "performance.current.prodAdj", d.performance.current.prodAdj),
+      numField("Ending A/R Balance", "performance.current.arBalance", d.performance.current.arBalance),
+      numField("Prior Period Production", "performance.prior.production", d.performance.prior.production),
+      numField("Prior Period Collections", "performance.prior.collections", d.performance.prior.collections),
+      numField("YTD Production", "performance.ytd.production", d.performance.ytd.production),
+      numField("YTD Collections", "performance.ytd.collections", d.performance.ytd.collections),
+    ]));
+  };
+  const stepAging = (body) => {
+    body.appendChild(el("p", { class: "wiz-hint" }, T("Patient totals from the Aging Report; claim totals from the Insurance Claim Aging Report.")));
+    body.appendChild(el("div", { class: "sub-label" }, T("Patient / Guarantor Aging")));
+    body.appendChild(grid([
+      numField("Current (0-30)", "patientAging.current", d.patientAging.current),
+      numField("31-60 Days", "patientAging.d31_60", d.patientAging.d31_60),
+      numField("61-90 Days", "patientAging.d61_90", d.patientAging.d61_90),
+      numField("Over 90 Days", "patientAging.over90", d.patientAging.over90),
+      numField("Est. Insurance Owed", "patientAging.insEst", d.patientAging.insEst),
+      numField("Guarantor Portion", "patientAging.guarPortion", d.patientAging.guarPortion),
+    ]));
+    body.appendChild(el("div", { class: "sub-label" }, T("Insurance Claims Aging")));
+    body.appendChild(grid([
+      numField("Primary — Current", "insuranceAging.primary.current", d.insuranceAging.primary.current),
+      numField("Secondary — Current", "insuranceAging.secondary.current", d.insuranceAging.secondary.current),
+      numField("Primary — 31-60", "insuranceAging.primary.d31_60", d.insuranceAging.primary.d31_60),
+      numField("Secondary — 31-60", "insuranceAging.secondary.d31_60", d.insuranceAging.secondary.d31_60),
+      numField("Primary — 61-90", "insuranceAging.primary.d61_90", d.insuranceAging.primary.d61_90),
+      numField("Secondary — 61-90", "insuranceAging.secondary.d61_90", d.insuranceAging.secondary.d61_90),
+      numField("Primary — Over 90", "insuranceAging.primary.over90", d.insuranceAging.primary.over90),
+      numField("Secondary — Over 90", "insuranceAging.secondary.over90", d.insuranceAging.secondary.over90),
+    ]));
+  };
+  const stepPatients = (body) => {
+    body.appendChild(el("p", { class: "wiz-hint" }, T("New-patient count and production for any add-on services tracked separately.")));
+    body.appendChild(grid([numField("New Patients This Period", "newPatients.actual", d.newPatients.actual)]));
+    body.appendChild(el("div", { class: "sub-label" }, T("Add-On Services")));
+    const box = el("div", {});
+    const rr = () => {
+      box.innerHTML = "";
+      d.addOnServices.forEach((a, idx) => {
+        const n = el("input", { value: a.name, placeholder: "Service name" });
+        n.addEventListener("input", () => d.addOnServices[idx].name = n.value);
+        const p = el("input", { type: "number", step: "0.01", value: a.production, placeholder: "Production" });
+        p.addEventListener("input", () => d.addOnServices[idx].production = parseFloat(p.value) || 0);
+        box.appendChild(el("div", { class: "provider-row", style: "margin-bottom:8px" }, [n, p,
+          el("button", { class: "rm-btn", onclick: () => { d.addOnServices.splice(idx, 1); rr(); } }, T("×"))]));
       });
-      const onTimeDays = d.tardiness.employees.reduce((a, e) => a + (e.daysWorked - e.lateDays.length), 0);
-      const totalDays = d.tardiness.employees.reduce((a, e) => a + e.daysWorked, 0);
-      const team = {
-        client: d.client, period: d.period, prepared: d.prepared,
-        kpis: {
-          production: d.performance.current.production,
-          collections: d.performance.current.collections,
-          collectionRatePct: d.performance.current.production ? Math.round(d.performance.current.collections / d.performance.current.production * 100) : 0,
-          productionChangePct: d.performance.prior.production ? Math.round((d.performance.current.production - d.performance.prior.production) / d.performance.prior.production * 1000) / 10 : 0,
-        },
-        byDepartment: Object.entries(dept_totals).map(([dept, v]) => ({ dept, production: Math.round(v.production * 100) / 100, collections: Math.round(v.collections * 100) / 100 })),
-        attendance: {
-          onTimeRatePct: totalDays ? Math.round(onTimeDays / totalDays * 100) : null,
-          vacationDaysTaken: d.daysOff.vacation.reduce((a, v) => a + (typeof v.days === "number" ? v.days : 1), 0),
-          holidayDate: d.daysOff.holidayDate,
-          note: "Team-wide on-time rate and time-off totals only - individual detail lives in the owner report.",
-        },
-        labor: d.labor.map(l => ({ dept: l.dept, staffCount: l.staffCount, hours: l.hours })),
-        newPatients: { actual: d.newPatients.actual },
-        addOnProduction: Math.round(d.addOnServices.reduce((a, x) => a + x.production, 0) * 100) / 100,
-      };
-
-      const ownerEnc = await encryptJSON(d, password);
-      const teamEnc = await encryptJSON(team, session.teamPassword || password);
-      downloadJSON(ownerEnc, "owner-view.json.enc");
-      downloadJSON(teamEnc, "team-view.json.enc");
-      statusEl.style.color = "var(--green)";
-      statusEl.textContent = `Downloaded both files. Commit them to data/${CLIENT}/${pk}/ to publish.`;
-    } catch (e) {
-      statusEl.style.color = "var(--red)";
-      statusEl.textContent = "Encryption failed: " + e.message;
-    }
-  });
-  form.appendChild(genBtn);
-  form.appendChild(statusEl);
-  form.appendChild(el("p", { class: "muted" }, document.createTextNode(
-    "Note: the team file needs the TEAM password to encrypt, not the owner password you logged in with. " +
-    "Enter it once below (kept in memory only, never saved)."
-  )));
-  const teamPwInput = el("input", { type: "password", placeholder: "Team password (for re-encrypting the team file)" });
-  teamPwInput.addEventListener("input", () => session.teamPassword = teamPwInput.value);
-  form.appendChild(teamPwInput);
-
-  content.appendChild(form);
-}
-
-function handleCSVUpload(ev, d, callback) {
-  const file = ev.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const lines = reader.result.split(/\r?\n/).filter(l => l.trim());
-    const headers = lines[0].split(",").map(h => h.trim());
-    const rows = lines.slice(1).map(line => {
-      const cells = line.split(",");
-      const rec = {};
-      headers.forEach((h, i) => rec[h] = (cells[i] || "").trim());
-      return rec;
-    });
-    d.providers = rows.map(r => {
-      const production = parseFloat(r.gross_production || 0);
-      const collections = parseFloat(r.net_collections || 0);
-      return {
-        name: r.provider_name || "", role: r.provider_role || "",
-        production, adjustments: parseFloat(r.adjustments || 0), collections,
-        collRate: production ? Math.round(collections / production * 100) : 0,
-      };
-    });
-    callback();
+    };
+    rr();
+    body.append(box, el("button", { class: "add-btn", onclick: () => { d.addOnServices.push({ name: "", production: 0 }); rr(); } }, T("+ Add service")));
   };
-  reader.readAsText(file);
-}
-
-// ---------------- SETTINGS (GOALS) ----------------
-async function renderSettingsTab(content, periodsObj, pk) {
-  content.appendChild(el("p", { class: "muted" }, document.createTextNode(
-    "Goals are a standing baseline, not encrypted (a target number alone doesn't disclose real performance). " +
-    "Stored at data/" + CLIENT + "/" + pk + "/goals.json - edit and re-download to update."
-  )));
-  const goals = (await fetchJSONOrNull(`data/${CLIENT}/${pk}/goals.json`)) || {
-    collectionsGoal: 0, departmentGoals: {}, addOnGoal: 0, newPatientsGoal: 0,
-    tardinessPolicy: { scheduledStart: "", lateAfter: "", lunchWindow: "", lunchMaxMinutes: 60, nonStandardEmployees: [] },
+  const stepProviders = (body) => {
+    const dz = el("label", { class: "dropzone" }, [
+      el("div", { class: "dz-title" }, T("Upload provider CSV")),
+      el("div", { class: "dz-sub" }, T("columns: provider_name, provider_role, gross_production, adjustments, net_collections")),
+    ]);
+    const csv = el("input", { type: "file", accept: ".csv", style: "display:none" });
+    dz.appendChild(csv);
+    const box = el("div", {});
+    const rr = () => {
+      box.innerHTML = "";
+      box.appendChild(el("div", { class: "provider-head" }, ["Name", "Role", "Production", "Adjustments", "Collections", ""].map(h => el("span", {}, T(h)))));
+      d.providers.forEach((p, idx) => {
+        const mk = (k, ph, isNum) => { const i = el("input", isNum ? { type: "number", step: "0.01", value: p[k] } : { value: p[k], placeholder: ph }); i.addEventListener("input", () => d.providers[idx][k] = isNum ? (parseFloat(i.value) || 0) : i.value); return i; };
+        box.appendChild(el("div", { class: "provider-row", style: "margin-bottom:8px" }, [
+          mk("name", "Name"), mk("role", "Role"), mk("production", "", true), mk("adjustments", "", true), mk("collections", "", true),
+          el("button", { class: "rm-btn", onclick: () => { d.providers.splice(idx, 1); rr(); } }, T("×"))]));
+      });
+    };
+    csv.addEventListener("change", (ev) => handleCSV(ev, d, rr));
+    rr();
+    body.append(dz, box, el("button", { class: "add-btn", onclick: () => { d.providers.push({ name: "", role: "", production: 0, adjustments: 0, collections: 0, collRate: 0 }); rr(); } }, T("+ Add provider")));
   };
-  if (!goals.tardinessPolicy) {
-    goals.tardinessPolicy = { scheduledStart: "", lateAfter: "", lunchWindow: "", lunchMaxMinutes: 60, nonStandardEmployees: [] };
+  const stepReview = (body) => {
+    d.providers.forEach(p => p.collRate = p.production ? Math.round(p.collections / p.production * 100) : 0);
+    const collRate = d.performance.current.production ? Math.round(d.performance.current.collections / d.performance.current.production * 100) : 0;
+    body.appendChild(el("p", { class: "wiz-hint" }, T("Quick check before saving. Save updates the report immediately.")));
+    body.appendChild(el("div", { class: "review-grid" }, [
+      ["Production", money0(d.performance.current.production)],
+      ["Collections", money0(d.performance.current.collections)],
+      ["Collection Rate", collRate + "%"],
+      ["New Patients", String(d.newPatients.actual)],
+      ["Add-On Production", money0(d.addOnServices.reduce((a, x) => a + x.production, 0))],
+      ["Providers", String(d.providers.length)],
+    ].map(([k, v]) => el("div", { class: "review-cell" }, [el("div", { class: "rc-label" }, T(k)), el("div", { class: "rc-val" }, T(v))]))));
+    const status = el("div", { class: "save-status" });
+    const saveBtn = el("button", { class: "primary-btn" }, T("Save Numbers"));
+    saveBtn.addEventListener("click", () => {
+      try {
+        const built = buildPayloads(d);
+        LEVELS.forEach(lv => saveOverride(pk, lv, built[lv]));
+        session.periods[pk] = built[level];
+        downloadJSON({ client: d.client, period: d.period, saved: true, numbers: stripToNumbers(d) }, `${CLIENT}-${pk}-numbers.json`);
+        status.style.color = "var(--green)";
+        status.innerHTML = "✓ Saved. The report now shows these numbers. A numbers file also downloaded for publishing (see README data-path).";
+      } catch (e) { status.style.color = "var(--red)"; status.textContent = "Save failed: " + e.message; }
+    });
+    body.append(saveBtn, status);
+  };
+
+  const steps = [
+    { title: "Performance", body: stepPerformance },
+    { title: "A/R Aging", body: stepAging },
+    { title: "Patients & Add-Ons", body: stepPatients },
+    { title: "Providers", body: stepProviders },
+    { title: "Review & Save", body: stepReview },
+  ];
+  let cur = 0;
+
+  const wizard = el("div", { class: "wizard" });
+  const stepsBar = el("div", { class: "wiz-steps" });
+  const bodyWrap = el("div", { class: "entry-form wiz-body" });
+  const nav = el("div", { class: "wiz-nav" });
+  content.append(wizard);
+  wizard.append(stepsBar, bodyWrap, nav);
+
+  function draw() {
+    stepsBar.innerHTML = "";
+    steps.forEach((s, i) => {
+      const cls = "wiz-step" + (i === cur ? " active" : "") + (i < cur ? " done" : "");
+      const chip = el("div", { class: cls, onclick: () => { if (i <= cur) { cur = i; draw(); } } }, [
+        el("span", { class: "wiz-num" }, T(i < cur ? "✓" : String(i + 1))),
+        el("span", { class: "wiz-title" }, T(s.title)),
+      ]);
+      stepsBar.appendChild(chip);
+    });
+    bodyWrap.innerHTML = "";
+    bodyWrap.appendChild(el("h2", {}, T(steps[cur].title)));
+    steps[cur].body(bodyWrap);
+    nav.innerHTML = "";
+    nav.appendChild(cur > 0 ? el("button", { class: "ghost-btn", onclick: () => { cur--; draw(); } }, T("← Back")) : el("span", {}));
+    nav.appendChild(cur < steps.length - 1 ? el("button", { class: "primary-btn", style: "margin-top:0", onclick: () => { cur++; draw(); } }, T("Next →")) : el("span", {}));
   }
+  draw();
+}
+
+function stripToNumbers(d) {
+  return {
+    performance: d.performance, patientAging: d.patientAging, insuranceAging: d.insuranceAging,
+    newPatients: d.newPatients, addOnServices: d.addOnServices, providers: d.providers,
+  };
+}
+
+// derive admin/manager/team payloads from an edited full-report object
+function buildPayloads(d) {
+  const admin = JSON.parse(JSON.stringify(d)); admin.role = "admin"; admin.canEditGoals = true;
+  const manager = JSON.parse(JSON.stringify(d)); manager.role = "manager"; manager.canEditGoals = false;
+  const deptT = {};
+  d.providers.forEach(p => { const k = p.role === "Dentist" ? "Dentists" : "Hygienists"; (deptT[k] = deptT[k] || { production: 0, collections: 0 }); deptT[k].production += p.production; deptT[k].collections += p.collections; });
+  const std = d.teamHealth.employees.filter(e => !e.nonStandardSchedule);
+  const otDays = std.reduce((a, e) => a + (e.daysWorked - e.lateCount), 0);
+  const totDays = std.reduce((a, e) => a + e.daysWorked, 0);
+  const deptOT = {};
+  std.forEach(e => { const b = deptOT[e.dept] = deptOT[e.dept] || { w: 0, l: 0 }; b.w += e.daysWorked; b.l += e.lateCount; });
+  const team = {
+    role: "team", client: d.client, period: d.period, prepared: d.prepared,
+    kpis: { production: d.performance.current.production, collections: d.performance.current.collections, collectionRatePct: d.performance.current.production ? Math.round(d.performance.current.collections / d.performance.current.production * 100) : 0 },
+    byDepartment: Object.entries(deptT).map(([dept, v]) => ({ dept, production: Math.round(v.production * 100) / 100, collections: Math.round(v.collections * 100) / 100 })),
+    teamHealth: { onTimeRatePct: totDays ? Math.round(otDays / totDays * 100) : null, byDepartment: Object.fromEntries(Object.entries(deptOT).map(([k, b]) => [k, b.w ? Math.round((b.w - b.l) / b.w * 100) : null])) },
+    attendance: { vacationDaysTaken: d.daysOff.vacation.reduce((a, v) => a + (typeof v.days === "number" ? v.days : 1), 0), holidayDate: d.daysOff.holidayDate },
+    labor: d.labor.map(l => ({ dept: l.dept, staffCount: l.staffCount, hours: l.hours })),
+    newPatients: { actual: d.newPatients.actual },
+    addOnProduction: Math.round(d.addOnServices.reduce((a, x) => a + x.production, 0) * 100) / 100,
+  };
+  return { admin, manager, team };
+}
+
+function handleCSV(ev, d, cb) {
+  const f = ev.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const lines = r.result.split(/\r?\n/).filter(l => l.trim());
+    const hdr = lines[0].split(",").map(h => h.trim());
+    d.providers = lines.slice(1).map(line => {
+      const c = line.split(","); const rec = {}; hdr.forEach((h, i) => rec[h] = (c[i] || "").trim());
+      const production = parseFloat(rec.gross_production || 0), collections = parseFloat(rec.net_collections || 0);
+      return { name: rec.provider_name || "", role: rec.provider_role || "", production, adjustments: parseFloat(rec.adjustments || 0), collections, collRate: production ? Math.round(collections / production * 100) : 0 };
+    });
+    cb();
+  };
+  r.readAsText(f);
+}
+
+// ---------------- SETTINGS (admin only) ----------------
+async function renderSettings(content, periodsObj, pk) {
+  content.appendChild(el("p", { class: "muted" }, T(
+    "Admin only. Goals and baselines are the standing targets the team screen measures against - not encrypted " +
+    "(a target/policy value discloses no actual performance). Managers enter the month's numbers; admin sets these."
+  )));
+  const goals = (await fetchJSONOrNull(`data/${CLIENT}/${pk}/goals.json`)) || { collectionsGoal: 0, departmentGoals: {}, addOnGoal: 0, newPatientsGoal: 0, onTimeGoalPct: 95, tardinessPolicy: {} };
+  if (!goals.tardinessPolicy) goals.tardinessPolicy = {};
   const d = periodsObj[pk];
-  const depts = [...new Set(d.providers.map(p => p.role === "Dentist" ? "Dentists" : "Hygienists"))];
-  depts.forEach(dep => { if (!(dep in goals.departmentGoals)) goals.departmentGoals[dep] = 0; });
+  [...new Set(d.providers.map(p => p.role === "Dentist" ? "Dentists" : "Hygienists"))].forEach(dep => { if (!(dep in goals.departmentGoals)) goals.departmentGoals[dep] = 0; });
 
   const form = el("div", { class: "entry-form" });
-  function goalField(label, getVal, setVal) {
-    const input = el("input", { type: "number", step: "0.01", value: getVal() });
-    input.addEventListener("input", () => setVal(parseFloat(input.value) || 0));
-    form.appendChild(el("div", { class: "field-row" }, [el("label", {}, document.createTextNode(label)), input]));
-  }
-  goalField("Collections Goal", () => goals.collectionsGoal, v => goals.collectionsGoal = v);
-  Object.keys(goals.departmentGoals).forEach(dep => {
-    goalField(`${dep} Goal`, () => goals.departmentGoals[dep], v => goals.departmentGoals[dep] = v);
-  });
-  goalField("Add-On Services Goal", () => goals.addOnGoal, v => goals.addOnGoal = v);
-  goalField("New Patients Goal", () => goals.newPatientsGoal, v => goals.newPatientsGoal = v);
+  const numF = (label, get, setv) => { const i = el("input", { type: "number", step: "0.01", value: get() }); i.addEventListener("input", () => setv(parseFloat(i.value) || 0)); form.appendChild(el("div", { class: "field-row" }, [el("label", {}, T(label)), i])); };
+  const txtF = (label, get, setv) => { const i = el("input", { type: "text", value: get() }); i.addEventListener("input", () => setv(i.value)); form.appendChild(el("div", { class: "field-row" }, [el("label", {}, T(label)), i])); };
 
-  form.appendChild(el("h2", {}, document.createTextNode("Tardiness Baseline")));
-  function textField(label, getVal, setVal) {
-    const input = el("input", { type: "text", value: getVal() });
-    input.addEventListener("input", () => setVal(input.value));
-    form.appendChild(el("div", { class: "field-row" }, [el("label", {}, document.createTextNode(label)), input]));
-  }
+  form.appendChild(sectionHead("Financial Goals"));
+  numF("Collections Goal", () => goals.collectionsGoal, v => goals.collectionsGoal = v);
+  Object.keys(goals.departmentGoals).forEach(dep => numF(`${dep} Goal`, () => goals.departmentGoals[dep], v => goals.departmentGoals[dep] = v));
+  numF("Add-On Services Goal", () => goals.addOnGoal, v => goals.addOnGoal = v);
+  numF("New Patients Goal", () => goals.newPatientsGoal, v => goals.newPatientsGoal = v);
+
+  form.appendChild(sectionHead("Team Health Baseline"));
   const pol = goals.tardinessPolicy;
-  textField("Scheduled Start (e.g. 7:50 AM)", () => pol.scheduledStart, v => pol.scheduledStart = v);
-  textField("Not Late Until (e.g. 8:10 AM)", () => pol.lateAfter, v => pol.lateAfter = v);
-  textField("Lunch Window (e.g. 1:00 PM - 2:00 PM)", () => pol.lunchWindow, v => pol.lunchWindow = v);
-  goalField("Lunch Max (minutes)", () => pol.lunchMaxMinutes, v => pol.lunchMaxMinutes = v);
-  textField("Non-Standard-Schedule Employees (comma-separated)",
-    () => pol.nonStandardEmployees.join(", "),
-    v => pol.nonStandardEmployees = v.split(",").map(s => s.trim()).filter(Boolean));
+  numF("On-Time Goal (%)", () => goals.onTimeGoalPct ?? 95, v => goals.onTimeGoalPct = v);
+  txtF("Scheduled Start (e.g. 7:50 AM)", () => pol.scheduledStart || "", v => pol.scheduledStart = v);
+  txtF("Not Late Until (e.g. 8:10 AM)", () => pol.lateAfter || "", v => pol.lateAfter = v);
+  txtF("Lunch Window (e.g. 1:00 PM - 2:00 PM)", () => pol.lunchWindow || "", v => pol.lunchWindow = v);
+  numF("Lunch Max (minutes)", () => pol.lunchMaxMinutes ?? 60, v => pol.lunchMaxMinutes = v);
+  txtF("Non-Standard-Schedule Employees (comma-separated)", () => (pol.nonStandardEmployees || []).join(", "), v => pol.nonStandardEmployees = v.split(",").map(s => s.trim()).filter(Boolean));
 
-  const dlBtn = el("button", { class: "primary-btn", onclick: () => downloadJSON(goals, "goals.json") },
-    document.createTextNode("Download goals.json"));
-  form.appendChild(dlBtn);
+  form.appendChild(el("button", { class: "primary-btn", onclick: () => downloadJSON(goals, "goals.json") }, T("Download goals.json")));
   content.appendChild(form);
 }
 
 // ==================================================================
-// TEAM VIEW — goal vs. actual, department by department. Simple, positive.
+// TEAM VIEW - goal vs actual + team-health scorecard. Simple, positive.
 // ==================================================================
 async function renderTeam(container, periodsObj) {
   container.innerHTML = "";
   container.appendChild(brandRow());
-
-  const pk = latestPeriod(periodsObj);
+  const pk = latest(periodsObj);
   const d = periodsObj[pk];
   const goals = (await fetchJSONOrNull(`data/${CLIENT}/${pk}/goals.json`)) || {};
 
-  const header = el("div", { class: "app-header" }, [el("h1", {}, document.createTextNode(d.client))]);
-  header.appendChild(el("button", { class: "logout", onclick: () => location.reload() }, document.createTextNode("Log out")));
+  const header = el("div", { class: "app-header" }, [el("h1", {}, T(d.client)),
+    el("button", { class: "logout", onclick: () => location.reload() }, T("Log out"))]);
   container.appendChild(header);
-  container.appendChild(el("span", { class: "badge team" }, document.createTextNode("Team Performance")));
-  container.appendChild(el("p", { class: "subline" }, document.createTextNode(`${d.period} · Prepared ${d.prepared}`)));
+  container.appendChild(el("span", { class: "badge badge-team" }, T("Team Performance")));
+  container.appendChild(el("p", { class: "subline" }, T(`${d.period} · Prepared ${d.prepared}`)));
 
-  const goalSection = el("div", { class: "section" });
-  goalSection.appendChild(el("h2", {}, document.createTextNode("Goal vs. Actual")));
-  goalSection.appendChild(goalBar("Collections", d.kpis.collections, goals.collectionsGoal, v => money(v, false)));
-  d.byDepartment.forEach(dept => {
-    const goal = (goals.departmentGoals || {})[dept.dept] || 0;
-    goalSection.appendChild(goalBar(dept.dept, dept.production, goal, v => money(v, false)));
-  });
-  goalSection.appendChild(goalBar("Add-On Services", d.addOnProduction || 0, goals.addOnGoal, v => money(v, false)));
-  goalSection.appendChild(goalBar("New Patients", d.newPatients.actual, goals.newPatientsGoal, v => Math.round(v)));
-  container.appendChild(goalSection);
+  // headline scorecard - the "two things": financial + team health
+  container.appendChild(el("div", { class: "kpis" }, [
+    statCard("Collections", money0(d.kpis.collections), "var(--green)", `${d.kpis.collectionRatePct}% collection rate`),
+    statCard("Production", money0(d.kpis.production), "var(--steel)", ""),
+    statCard("New Patients", String(d.newPatients.actual), "var(--navy)", goals.newPatientsGoal ? `goal ${goals.newPatientsGoal}` : ""),
+    statCard("Team On-Time", (d.teamHealth.onTimeRatePct ?? "—") + "%", d.teamHealth.onTimeRatePct >= (goals.onTimeGoalPct || 95) ? "var(--green)" : "var(--amber)", `goal ${goals.onTimeGoalPct || 95}%`),
+  ]));
 
-  const kpis = el("div", { class: "kpis" }, [
-    kpiCard("Collection Rate", d.kpis.collectionRatePct + "%", "var(--navy)"),
-    kpiCard("On-Time Rate", (d.attendance.onTimeRatePct ?? "&mdash;") + "%", "var(--amber)"),
-  ]);
-  container.appendChild(kpis);
+  container.appendChild(sectionHead("Goal vs. Actual — Financial"));
+  const gs = el("div", { class: "section" });
+  gs.appendChild(goalBar("Collections", d.kpis.collections, goals.collectionsGoal, v => money0(v)));
+  d.byDepartment.forEach(dep => gs.appendChild(goalBar(dep.dept, dep.production, (goals.departmentGoals || {})[dep.dept] || 0, v => money0(v))));
+  gs.appendChild(goalBar("Add-On Services", d.addOnProduction || 0, goals.addOnGoal, v => money0(v)));
+  gs.appendChild(goalBar("New Patients", d.newPatients.actual, goals.newPatientsGoal, v => Math.round(v)));
+  container.appendChild(gs);
 
-  const laborSection = el("div", { class: "section" });
-  laborSection.appendChild(el("h2", {}, document.createTextNode("Staffing Hours")));
-  laborSection.appendChild(table(["Department", "Staff", "Hours"], d.labor.map(l => [l.dept, l.staffCount, l.hours]), [1, 2]));
-  container.appendChild(laborSection);
+  container.appendChild(sectionHead("Team Health — On-Time by Department"));
+  const th = d.teamHealth.byDepartment || {};
+  container.appendChild(table(["Department", "On-Time Rate"],
+    Object.entries(th).map(([dept, pct]) => [dept, el("span", { class: `chip ${rateClass(pct)}`, html: (pct ?? "—") + "%" })])));
+  container.appendChild(el("p", { class: "muted" }, T("On-time rate by department only - individual attendance stays private to leadership.")));
 
-  const noteSection = el("div", { class: "section" });
-  noteSection.appendChild(el("h2", {}, document.createTextNode("Time Off This Period")));
-  noteSection.appendChild(el("p", {}, document.createTextNode(
-    `Company holiday: ${d.attendance.holidayDate}. Vacation days taken: ${d.attendance.vacationDaysTaken}.`
-  )));
-  container.appendChild(noteSection);
+  container.appendChild(sectionHead("Staffing Hours"));
+  container.appendChild(table(["Department", "Staff", "Hours"], d.labor.map(l => [l.dept, l.staffCount, l.hours]), [1, 2]));
+
+  container.appendChild(sectionHead("Time Off This Period"));
+  container.appendChild(el("p", {}, T(`Company holiday: ${d.attendance.holidayDate}. Vacation days taken: ${d.attendance.vacationDaysTaken}.`)));
 }
 
 // ---------------- GATE ----------------
@@ -601,8 +579,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const app = document.getElementById("app");
 
   const infoModal = document.getElementById("infoModal");
-  const infoClose = document.getElementById("infoClose");
-  infoClose.addEventListener("click", () => infoModal.classList.remove("visible"));
+  document.getElementById("infoClose").addEventListener("click", () => infoModal.classList.remove("visible"));
   infoModal.addEventListener("click", (ev) => { if (ev.target === infoModal) infoModal.classList.remove("visible"); });
 
   form.addEventListener("submit", async (ev) => {
@@ -611,19 +588,12 @@ document.addEventListener("DOMContentLoaded", () => {
     form.querySelector("button").disabled = true;
     try {
       const result = await attemptLogin(input.value);
-      if (!result) {
-        errorEl.textContent = "Incorrect password.";
-        form.querySelector("button").disabled = false;
-        return;
-      }
+      if (!result) { errorEl.textContent = "Incorrect password."; form.querySelector("button").disabled = false; return; }
       session = result;
       gate.style.display = "none";
       app.classList.add("visible");
-      if (session.level === "owner") renderOwner(app, session.periods, session.password);
-      else renderTeam(app, session.periods);
-    } catch (e) {
-      errorEl.textContent = "Could not load report data.";
-      form.querySelector("button").disabled = false;
-    }
+      if (result.level === "team") renderTeam(app, result.periods);
+      else renderFull(app, result.periods, result.level, result.password);
+    } catch (e) { errorEl.textContent = "Could not load report data."; form.querySelector("button").disabled = false; }
   });
 });

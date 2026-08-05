@@ -1,87 +1,111 @@
-# Keep Metrics (prototype)
+# Keep Metrics
 
-A password-gated, non-indexed monthly metrics dashboard, built as an ASK System
-offering. One deployment = one client engagement — the page never names the
-client anywhere a search engine, browser tab, or shoulder-surfer could see it
-before entering a password.
+A password-gated, non-indexed monthly metrics dashboard, built as an **ASK
+System** offering. It reports on **two things — financial health and team
+health** — for a single client. One deployment = one client engagement; the
+page never names the client anywhere a search engine, browser tab, or
+shoulder-surfer could see before a password is entered (`robots.txt`
+disallow-all + `noindex`, generic `<title>Keep Metrics`).
 
-## Getting data from the client
+Live (AFD): **https://redshift-holdings.github.io/afd-keep-metrics/**
 
-`Dentrix Monthly Report Checklist.pdf` is what to hand the client (or their
-staff) — it lists exactly which four Dentrix reports to run each month and
-which Entry tab field each number goes into. The dividing line: anything
-that's a single totals-row number goes in the form; the Timecard report
-(tardiness/days-off) stays a raw-file handoff since it's per-punch detail
-across dozens of rows, not something to hand-type.
+## Three roles
 
-## What's real vs. what's a placeholder right now
+| Role | Sees | Does |
+|------|------|------|
+| **Admin** (doctor) | Everything: financials, per-employee team health, days off | **Sets goals & baselines** (Settings tab) |
+| **Manager** | Same reports as admin, minus goal-setting | **Enters the month's numbers** (Entry wizard) |
+| **Team** (view-only) | Goal-vs-actual + on-time rate *by department* — no names | Nothing; it's the breakroom screen |
 
-- **Real and working:** the encryption pipeline, the two-tier password model,
-  both dashboards, the chart rendering, seeded with AFD's actual July 2026
-  numbers (same data as the three PDF reports built this session).
-- **Placeholder:** the two passwords below, and the CSV column mapping in
-  `scripts/parse_csv_example.py` (we don't have a real export from AFD's
-  practice-management system yet — swap in real headers the moment we do).
-- **Not yet deployed anywhere.** This lives locally in `_prototypes/` until
-  you've confirmed the security model and picked a real hosting target —
-  see "Going live" below.
+Each role is a **separately-encrypted payload with its own password**
+(`admin-view.json.enc`, `manager-view.json.enc`, `team-view.json.enc`). The
+security boundary is *which key decrypts*, not a client-side role flag — a team
+password mathematically cannot open the manager or admin file. The gate tries
+admin → manager → team and loads the richest view that decrypts.
 
-## The two-password model (why, not just how)
+Why encryption is the boundary: static hosting can't gate file access — anyone
+with a direct URL to a `.json` file can fetch it. A JS password prompt is a UI
+suggestion, not a lock. Encrypting each tier separately *is* the lock.
 
-GitHub Pages (and static hosting generally) can't actually gate file access —
-anyone with a direct URL to a JSON file can fetch it, no matter what a
-password screen on `index.html` says. A password prompt in JavaScript alone
-is a UI suggestion, not a lock.
+## Entering numbers — the wizard (Entry / Upload tab)
 
-So the actual protection here is **encryption, not a login check**: each
-month's data is encrypted twice, once per audience, with two independent
-passwords:
+Managers (and admin) get a 5-step wizard: **Performance → A/R Aging → Patients
+& Add-Ons → Providers → Review & Save**. Fill it from the Dentrix report totals
+(click the ⓘ for which reports), or upload a provider CSV on the Providers
+step. **Save** updates the report immediately — no passwords, no key handling.
 
-- `owner-view.json.enc` — the full detail (every provider, every aged claim
-  by patient name, every employee's tardiness/attendance). Only the **doctor's
-  password** derives the key that decrypts this.
-- `team-view.json.enc` — department-level aggregates only. No named
-  tardiness or absence call-outs, no per-patient claim detail. The **team
-  password** derives a completely different key that can only ever decrypt
-  this file — it mathematically cannot unlock the owner file, even if someone
-  guesses at it.
+Save writes the edited numbers to the browser's local storage (so the report
+reflects them right away on that machine) **and** downloads a plain
+`afd-<period>-numbers.json` file. That numbers file is the hand-off for
+*publishing* — see the data path below. This keeps the manager's job simple:
+type numbers, click Save. Keys and encryption never touch their screen.
 
-The gate page has one password field. On submit, the site tries the owner
-key first, then the team key; whichever one actually decrypts something
-determines which dashboard loads. There's no role flag to spoof — the
-boundary is "do you have a key that works," full stop.
+> Prototype limit: local-storage Save reflects only on the machine that entered
+> it. Publishing to the live site for *everyone* is the server/MIA step below,
+> not something a static page can do on its own.
 
-**Current placeholder passwords** (change before anything real goes near
-this): `owner-changeme-2026` and `team-changeme-2026`, set in
-`scripts/build_seed_json.py` → `encrypt_data.py` invocation. Re-run
-`encrypt_data.py` with real passwords before deploying.
+## Data path — now → near-term → MIA
 
-## Pipeline (for now — no database)
+**The `Dentrix Monthly Report Checklist.pdf`** tells the client which reports to
+run. The dividing line: a single totals-row number goes in the wizard; the
+Timecard report (attendance) stays a raw-file hand-off (per-punch detail across
+dozens of rows — parsed, not hand-typed; tardiness also comes from the doctor).
 
-1. Client sends a monthly report (ideally CSV; PDF works too, just slower to
-   parse — see the AFD Timecard PDF parser from this session for the
-   pdfplumber approach when CSV isn't available).
-2. A parser script turns it into the shared JSON schema (see
-   `scripts/build_seed_json.py` for the schema shape; `parse_csv_example.py`
-   for the CSV-driven version once we have a real export to map columns
-   from).
-3. `scripts/encrypt_data.py` encrypts the owner and team payloads separately.
-4. Commit `data/<client>/<yyyy-mm>/*.json.enc` — that's the entire "database"
-   for now. `data/manifest.json` just lists which periods exist (plaintext,
-   but only period labels like `2026-07`, nothing sensitive).
-5. The dashboard reads whichever periods it can decrypt at page-load time —
-   no build step, no server. Add a month, push, done.
+1. **Now (prototype):** manager runs Dentrix reports → types totals into the
+   wizard → Save → sends us the `numbers.json` (and the raw Timecard export) →
+   we run `scripts/build_seed_json.py` + `scripts/encrypt_data.py` and commit
+   the `.enc` files.
+2. **Near-term (low-touch):** manager drops the Dentrix exports into an intake
+   (upload form / email / Drive folder). A small serverless endpoint holds the
+   keys, parses the totals, re-encrypts all three tiers server-side, and
+   publishes. The manager submits raw reports and never types a number or a key
+   — which also dissolves the static-site problem that a manager can't
+   re-encrypt tiers they don't hold keys for.
+3. **Future (MIA):** MIA ingests the raw Dentrix exports directly (she already
+   has the parsing patterns from this build — pdfplumber for the Timecard PDF,
+   totals-row extraction for the A/R reports), populates the numbers, regenerates
+   the encrypted payloads, and publishes on a schedule. Fully hands-off.
 
-## Two views
+The through-line: **entry stays dead simple; publishing moves server-side.**
+Steps 2–3 are the "real backend" that the prototype's honest limits point to.
 
-- **Owner** (`renderOwner` in `assets/app.js`) — everything: provider-level
-  production/collections, full A/R aging, named aged insurance claims, labor
-  hours, per-employee tardiness and days-off detail. Meant for the doctor
-  only.
-- **Team** (`renderTeam`) — practice-wide KPIs, production/collections by
-  department, staffing hours, and time-off *totals* only (no names attached
-  to lateness or absences). Meant to go up on a screen once a month without
-  putting anyone on the spot individually.
+## Team health → performance master plan
+
+The Team Health tab turns attendance into a **per-employee scorecard** (on-time
+%, late count, lunch overages, worst instance) against the real policy — not a
+statistical guess. Policy: scheduled start 7:50 AM, late after 8:10 AM (20-min
+grace), 60-min lunch, on-time goal 95%; part-time / non-standard staff are
+excluded. Tracked monthly, this trends into a per-person performance picture.
+Paired with the ss-team **check-ins** (the qualitative half), the two together
+are the "personal & performance master plan" — quantitative attendance +
+qualitative check-in. (The ss-team integration itself lives in that repo, not
+here.)
+
+## Files
+
+- `index.html` — gate + info modal
+- `assets/app.js` — login, the three render paths (`renderFull` for admin/
+  manager, `renderTeam`), the Entry wizard, `buildPayloads` (derives all three
+  tiers from one edited object)
+- `assets/crypto.js` — Web Crypto decrypt/encrypt, mirrors `encrypt_data.py`
+- `assets/style.css` — the visual system (squared, white cards, colored
+  accents, underline tabs, rate chips)
+- `scripts/build_seed_json.py` — assembles the three payloads + `goals.json`
+  from verified figures (+ `recomputed_tardiness.json`, gitignored — it holds
+  plaintext names/times and must never be committed)
+- `scripts/encrypt_data.py` — PBKDF2-SHA256 (200k) → AES-GCM-256 per tier
+- `scripts/parse_csv_example.py` — placeholder CSV→providers mapping (swap for
+  real Dentrix export headers when we have one)
+- `data/<client>/<yyyy-mm>/` — the encrypted payloads + plaintext `goals.json`
+  (a target/policy value discloses no actual performance, so goals stay
+  unencrypted and the team screen can read them)
+
+## Passwords
+
+Real passphrase-style passwords are set at encrypt time and live only in the
+handoff to Glenn — never written into a file in this repo. Rotate by re-running
+`encrypt_data.py` with new values. (The old `*-changeme-*` placeholders are
+retired.)
 
 ## Local testing
 
@@ -89,25 +113,16 @@ this): `owner-changeme-2026` and `team-changeme-2026`, set in
 python3 -m http.server 8744 --directory .
 ```
 
-Then open `http://localhost:8744`. (A `.claude/launch.json` entry named
-`keep-metrics` does this for you via the preview tooling.) Opening
-`index.html` directly via `file://` will NOT work — the browser blocks
-`fetch()` of local files under the `file://` origin, so a real (even local)
-HTTP server is required.
+Open `http://localhost:8744`. Opening `index.html` via `file://` will NOT work
+— the browser blocks `fetch()` of local files, so a real (even local) HTTP
+server is required. A `.claude/launch.json` entry named `keep-metrics` starts
+this for the preview tooling.
 
-## Going live — what's still a decision, not a default
+## Hosting note
 
-- **Where to host.** Plain GitHub Pages works with the encryption model
-  above (confidentiality survives even though the files are technically
-  public). If real server-side access control is wanted instead of
-  encryption-as-the-boundary, Cloudflare Pages + Cloudflare Access (still
-  deploys from the same GitHub repo) is the stronger option — worth asking
-  before picking.
-- **Real passwords.** Replace both placeholders and re-encrypt before this
-  touches anything live.
-- **Team-member data entry.** The "ideal world" version — a team member logs
-  in, fills in numbers, and saves — needs an actual backend (there's nowhere
-  for a static site to write to). A small serverless form (Cloudflare
-  Worker + KV, or a locked-down Google Form → Sheet → script pipeline) would
-  be the next real piece of infrastructure, not something to fake with
-  client-side JS.
+Live on GitHub Pages (public repo — a private repo's Pages output is visible
+only to GitHub collaborators, which would lock out the doctor/staff who only
+ever get a password). Confidentiality survives the public repo because
+encryption, not repo secrecy, is the boundary. Cloudflare Pages + Access is the
+stronger option if real server-side gating is ever wanted — and it's the
+natural home for the step-2/3 backend above.
