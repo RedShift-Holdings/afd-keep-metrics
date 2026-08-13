@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<title>Team Presentation</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div class="gate" id="gate">
+  <div class="gate-box">
+    <img class="ask-logo" src="assets/ask-logo-color.png" alt="ASK System">
+    <div class="mark"><span class="mark-keep">Team</span> Presentation</div>
+    <form id="gateForm">
+      <input type="password" id="gatePassword" placeholder="Password" autocomplete="current-password" required>
+      <button type="submit">Open Presentation</button>
+    </form>
+    <div class="gate-error" id="gateError"></div>
+    <div class="gate-note">This link is private. If you weren't given a password directly, you're not meant to have this link.</div>
+  </div>
+</div>
+
+<script src="assets/config.js"></script>
+<script src="assets/crypto.js"></script>
+<script>
+// The slide deck ships encrypted with the same team password as the
+// dashboard (data/<client>/<period>/slides.json.enc, a {html: "..."}
+// payload). On a good password we swap the whole document for the deck.
+const SLIDES_URL = `data/${CLIENT}/2026-07/slides.json.enc`;
+
+document.getElementById("gateForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = document.getElementById("gateError");
+  const btn = e.target.querySelector("button");
+  err.textContent = "";
+  btn.disabled = true; btn.textContent = "Opening…";
+  try {
+    const res = await fetch(SLIDES_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error("Presentation file not found.");
+    const envelope = await res.json();
+    const payload = await tryDecrypt(envelope, document.getElementById("gatePassword").value.trim());
+    if (!payload || !payload.html) {
+      err.textContent = "That password doesn't open this presentation.";
+      btn.disabled = false; btn.textContent = "Open Presentation";
+      return;
+    }
+    document.open();
+    document.write(payload.html);
+    document.close();
+  } catch (ex) {
+    err.textContent = ex.message || "Something went wrong loading the presentation.";
+    btn.disabled = false; btn.textContent = "Open Presentation";
+  }
+});
+</script>
+</body>
+</html>
