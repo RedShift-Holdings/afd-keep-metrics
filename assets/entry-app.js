@@ -24,63 +24,39 @@ const BLANK = {
 
 const d = JSON.parse(JSON.stringify(BLANK));
 const set = (path, val) => { const p = path.split("."); let c = d; for (let i = 0; i < p.length - 1; i++) c = c[p[i]]; c[p[p.length - 1]] = val; };
-const numField = (label, path, val) => {
+const numField = (label, path, val, hint) => {
   const i = el("input", { type: "number", step: "0.01", value: val, placeholder: "0" });
   i.addEventListener("input", () => set(path, parseFloat(i.value) || 0));
-  return el("div", { class: "field-row" }, [el("label", {}, T(label)), i]);
+  const kids = [el("label", {}, T(label)), i];
+  if (hint) kids.push(el("div", { class: "field-hint" }, T(hint)));
+  return el("div", { class: "field-row" }, kids);
 };
-const textField = (label, path, ph) => {
+const textField = (label, path, ph, hint) => {
   const i = el("input", { type: "text", placeholder: ph || "" });
   i.addEventListener("input", () => set(path, i.value));
-  return el("div", { class: "field-row" }, [el("label", {}, T(label)), i]);
+  const kids = [el("label", {}, T(label)), i];
+  if (hint) kids.push(el("div", { class: "field-hint" }, T(hint)));
+  return el("div", { class: "field-row" }, kids);
 };
 const grid = (f) => el("div", { class: "field-grid" }, f);
 
-const stepPerformance = (b) => {
+const stepBasics = (b) => {
   b.appendChild(el("p", { class: "wiz-hint" }, [
     el("button", { class: "info-icon", type: "button", title: "Which reports", onclick: () => document.getElementById("infoModal").classList.add("visible") }, T("i")),
-    el("span", {}, T("From the Provider A/R Totals report — the TOTAL row and its Prev. Month / YTD columns.")),
+    el("span", {}, T("Two numbers, both off the Provider A/R Totals report.")),
   ]));
   b.appendChild(grid([
     monthField("Reporting Month", (label, ym) => { d.period = label; d.periodKey = ym; }),
     textField("Submitted By (required)", "submittedBy", "Your name"),
-    numField("Gross Production", "performance.current.production", ""),
-    numField("Net Collections", "performance.current.collections", ""),
-    numField("Production Adjustments (+)", "performance.current.prodAdj", ""),
-    numField("Ending A/R Balance", "performance.current.arBalance", ""),
-    numField("Prior Period Production", "performance.prior.production", ""),
-    numField("Prior Period Collections", "performance.prior.collections", ""),
-    numField("YTD Production", "performance.ytd.production", ""),
-    numField("YTD Collections", "performance.ytd.collections", ""),
-  ]));
-};
-const stepAging = (b) => {
-  b.appendChild(el("p", { class: "wiz-hint" }, T("Patient totals from the Aging Report; claim totals from the Insurance Claim Aging Report.")));
-  b.appendChild(el("div", { class: "sub-label" }, T("Patient / Guarantor Aging")));
-  b.appendChild(grid([
-    numField("Current (0-30)", "patientAging.current", ""),
-    numField("31-60 Days", "patientAging.d31_60", ""),
-    numField("61-90 Days", "patientAging.d61_90", ""),
-    numField("Over 90 Days", "patientAging.over90", ""),
-    numField("Est. Insurance Owed", "patientAging.insEst", ""),
-    numField("Guarantor Portion", "patientAging.guarPortion", ""),
-  ]));
-  b.appendChild(el("div", { class: "sub-label" }, T("Insurance Claims Aging")));
-  b.appendChild(grid([
-    numField("Primary — Current", "insuranceAging.primary.current", ""),
-    numField("Secondary — Current", "insuranceAging.secondary.current", ""),
-    numField("Primary — 31-60", "insuranceAging.primary.d31_60", ""),
-    numField("Secondary — 31-60", "insuranceAging.secondary.d31_60", ""),
-    numField("Primary — 61-90", "insuranceAging.primary.d61_90", ""),
-    numField("Secondary — 61-90", "insuranceAging.secondary.d61_90", ""),
-    numField("Primary — Over 90", "insuranceAging.primary.over90", ""),
-    numField("Secondary — Over 90", "insuranceAging.secondary.over90", ""),
+    numField("Gross Production", "performance.current.production", "", "Provider A/R Totals report, the TOTAL row, Production column."),
+    numField("Net Collections", "performance.current.collections", "", "Same TOTAL row, Collections column."),
   ]));
 };
 const stepPatients = (b) => {
   b.appendChild(el("p", { class: "wiz-hint" }, T("New-patient count and production for any add-on services tracked separately.")));
-  b.appendChild(grid([numField("New Patients This Period", "newPatients.actual", "")]));
+  b.appendChild(grid([numField("New Patients This Month", "newPatients.actual", "", "Dentrix's New Patient report or practice dashboard.")]));
   b.appendChild(el("div", { class: "sub-label" }, T("Add-On Services")));
+  b.appendChild(el("p", { class: "field-hint", style: "margin-bottom:10px" }, T("Only if Ortho/Whitening/Implants etc. are tracked as their own procedure codes. Leave blank rows if not.")));
   const box = el("div", {});
   const rr = () => {
     box.innerHTML = "";
@@ -96,24 +72,9 @@ const stepPatients = (b) => {
   rr();
   b.append(box, el("button", { class: "add-btn", onclick: () => { d.addOnServices.push({ name: "", production: 0 }); rr(); } }, T("+ Add service")));
 };
-const stepProviders = (b) => {
-  b.appendChild(el("p", { class: "wiz-hint" }, T("One row per provider — use each provider's own row on the A/R Totals report.")));
-  const box = el("div", {});
-  const rr = () => {
-    box.innerHTML = "";
-    box.appendChild(el("div", { class: "provider-head" }, ["Name", "Role", "Production", "Adjustments", "Collections", ""].map(h => el("span", {}, T(h)))));
-    d.providers.forEach((p, idx) => {
-      const mk = (k, ph, isNum) => { const i = el("input", isNum ? { type: "number", step: "0.01", value: p[k] || "", placeholder: ph } : { value: p[k], placeholder: ph }); i.addEventListener("input", () => d.providers[idx][k] = isNum ? (parseFloat(i.value) || 0) : i.value); return i; };
-      box.appendChild(el("div", { class: "provider-row", style: "margin-bottom:8px" }, [
-        mk("name", "Name"), mk("role", "Role"), mk("production", "0", true), mk("adjustments", "0", true), mk("collections", "0", true),
-        el("button", { class: "rm-btn", onclick: () => { d.providers.splice(idx, 1); rr(); } }, T("×"))]));
-    });
-  };
-  rr();
-  b.append(box, el("button", { class: "add-btn", onclick: () => { d.providers.push({ name: "", role: "Dentist", production: 0, adjustments: 0, collections: 0 }); rr(); } }, T("+ Add provider")));
-};
 const stepReview = (b) => {
   const collRate = d.performance.current.production ? Math.round(d.performance.current.collections / d.performance.current.production * 100) : 0;
+  const addOnTotal = d.addOnServices.reduce((a, s) => a + (s.production || 0), 0);
   b.appendChild(el("p", { class: "wiz-hint" }, T("Quick check, then submit. In the live build this goes straight to us; the reports update once it's published.")));
   b.appendChild(el("div", { class: "review-grid" }, [
     ["Month", d.period || "—"],
@@ -121,7 +82,7 @@ const stepReview = (b) => {
     ["Collections", money0(d.performance.current.collections)],
     ["Collection Rate", collRate + "%"],
     ["New Patients", String(d.newPatients.actual)],
-    ["Providers", String(d.providers.filter(p => p.name).length)],
+    ["Add-On Production", money0(addOnTotal)],
   ].map(([k, v]) => el("div", { class: "review-cell" }, [el("div", { class: "rc-label" }, T(k)), el("div", { class: "rc-val" }, T(v))]))));
   const status = el("div", { class: "save-status" });
   const btn = el("button", { class: "primary-btn" }, T("Submit Numbers"));
@@ -140,10 +101,8 @@ const stepReview = (b) => {
 };
 
 const steps = [
-  { title: "Performance", body: stepPerformance },
-  { title: "A/R Aging", body: stepAging },
+  { title: "The Basics", body: stepBasics },
   { title: "Patients & Add-Ons", body: stepPatients },
-  { title: "Providers", body: stepProviders },
   { title: "Review & Submit", body: stepReview },
 ];
 let cur = 0;
