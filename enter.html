@@ -7,12 +7,10 @@
 <title>Monthly Numbers</title>
 <link rel="stylesheet" href="assets/style.css">
 </head>
-<body>
+<body class="quiz-body">
 
-<div class="public-page">
+<div class="public-page quiz-page">
   <div class="app-brand"><img src="assets/ask-logo-color.png" alt="ASK System"></div>
-  <h1 class="public-title"><span class="mark-keep">KEEP</span> Metrics — Monthly Numbers</h1>
-  <p class="public-sub" id="publicSub">Four numbers, about 2 minutes. Fill in from the Dentrix report totals and submit.</p>
   <div id="entryRoot"></div>
 </div>
 
@@ -20,10 +18,12 @@
   <div class="modal-box">
     <button class="modal-close" id="infoClose" type="button" aria-label="Close">&times;</button>
     <h2>Which Dentrix reports</h2>
-    <p class="modal-sub">Just one report, plus two easy lookups. Enter the totals-row numbers here.</p>
-    <h3>The Basics</h3><p>Provider A/R Totals report &mdash; the TOTAL row only. Production and Collections.</p>
+    <p class="modal-sub">Mostly one report, plus a couple of easy lookups. Enter the totals-row numbers here.</p>
+    <h3>Production, Collections &amp; Doctor Collections</h3><p>Provider A/R Totals report. Use the TOTAL row for practice-wide Production and Collections; use each doctor's own row, Collections column, for the by-doctor numbers.</p>
+    <h3>Hygiene Collections</h3><p>Same report: add up the hygienists' rows, Collections column (or use Dentrix's own hygiene total if it has one).</p>
+    <h3>Treatment Plan Acceptance</h3><p>Dentrix's Treatment Plan or Case Acceptance report, as a percent.</p>
     <h3>Patients &amp; Add-Ons</h3><p>New-patient count (Dentrix's New Patient report or dashboard) and production per add-on category (Ortho, Whitening, Implants, etc.), if you track those separately. Skip add-ons if you don't.</p>
-    <p class="modal-tiny">Attendance/tardiness comes separately from the doctor, and detailed aging/insurance reports still come to us as attachments &mdash; neither is entered here.</p>
+    <p class="modal-tiny">Attendance/tardiness comes separately from the doctor, and detailed aging/insurance reports still come to us as attachments. Neither is entered here.</p>
   </div>
 </div>
 
