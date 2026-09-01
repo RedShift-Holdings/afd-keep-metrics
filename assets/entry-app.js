@@ -25,7 +25,7 @@ const BLANK = {
   newPatients: { actual: 0 },
   addOnServices: [{ name: "Orthodontics", production: 0 }, { name: "Teeth Whitening", production: 0 }, { name: "Implants", production: 0 }],
   providers: [{ name: "Dr. Mitchell", role: "Dentist", production: 0, adjustments: 0, collections: 0 }, { name: "Dr. Yassa", role: "Dentist", production: 0, adjustments: 0, collections: 0 }],
-  hygieneCollections: 0,
+  hygienists: [{ name: "", collections: 0 }, { name: "", collections: 0 }, { name: "", collections: 0 }],
   treatmentAcceptanceRate: 0,
 };
 
@@ -201,9 +201,26 @@ function drawDoctorCollections() {
 
 function drawHygieneCollections() {
   quizCard(root, {
-    step: 5, total: TOTAL_STEPS, title: "What did Hygiene collect?",
-    hint: "Same report: the hygienists' rows, Collections column, added together. If Dentrix already totals it for you, use that number.",
-    body: (b) => b.appendChild(bigNumberInput("hygieneCollections", d.hygieneCollections || "", () => { cur++; draw(); })),
+    step: 5, total: TOTAL_STEPS, title: "What did each Hygienist collect?",
+    hint: "Same Provider A/R Totals report, each hygienist's own row, Collections column.",
+    body: (b) => {
+      const box = el("div", { class: "quiz-addon-list" });
+      const rr = () => {
+        box.innerHTML = "";
+        d.hygienists.forEach((h, idx) => {
+          const n = el("input", { value: h.name, placeholder: "Hygienist name", class: "quiz-addon-name" });
+          n.addEventListener("input", () => d.hygienists[idx].name = n.value);
+          const dollar = el("span", { class: "quiz-addon-prefix" }, T("$"));
+          const c = el("input", { type: "number", step: "0.01", value: h.collections || "", placeholder: "0", class: "quiz-addon-amt" });
+          c.addEventListener("input", () => d.hygienists[idx].collections = parseFloat(c.value) || 0);
+          const amtWrap = el("div", { class: "quiz-addon-amt-wrap" }, [dollar, c]);
+          box.appendChild(el("div", { class: "quiz-addon-row" }, [n, amtWrap,
+            el("button", { class: "quiz-rm", type: "button", onclick: () => { d.hygienists.splice(idx, 1); rr(); } }, T("×"))]));
+        });
+      };
+      rr();
+      b.append(box, el("button", { class: "quiz-add-more", type: "button", onclick: () => { d.hygienists.push({ name: "", collections: 0 }); rr(); } }, T("+ Add another hygienist")));
+    },
     onNext: () => { cur++; draw(); },
     showBack: true, onBack: () => { cur--; draw(); },
   });
@@ -261,6 +278,7 @@ function drawReview() {
   const collRate = d.performance.current.production ? Math.round(d.performance.current.collections / d.performance.current.production * 100) : 0;
   const addOnTotal = d.addOnServices.reduce((a, s) => a + (s.production || 0), 0);
   const docTotal = d.providers.reduce((a, p) => a + (p.collections || 0), 0);
+  const hygTotal = d.hygienists.reduce((a, h) => a + (h.collections || 0), 0);
   root.innerHTML = "";
   const card = el("div", { class: "quiz-card" });
   card.appendChild(el("div", { class: "quiz-qmark" }, T("?")));
@@ -272,7 +290,7 @@ function drawReview() {
     ["Collections", money0(d.performance.current.collections)],
     ["Collection Rate", collRate + "%"],
     ["Doctor Collections", money0(docTotal)],
-    ["Hygiene Collections", money0(d.hygieneCollections)],
+    ["Hygiene Collections", money0(hygTotal)],
     ["Treatment Acceptance", (d.treatmentAcceptanceRate || 0) + "%"],
     ["New Patients", String(d.newPatients.actual)],
     ["Add-On Production", money0(addOnTotal)],
@@ -307,7 +325,8 @@ function buildMailtoLink(record) {
     `Collection Rate: ${collRate}%`,
     `Doctor Collections:`,
     ...record.providers.filter(p => p.name).map(p => `  ${p.name}: ${money0(p.collections)}`),
-    `Hygiene Collections: ${money0(record.hygieneCollections)}`,
+    `Hygiene Collections: ${money0(record.hygienists.reduce((a, h) => a + (h.collections || 0), 0))}`,
+    ...record.hygienists.filter(h => h.name).map(h => `  ${h.name}: ${money0(h.collections)}`),
     `Treatment Plan Acceptance: ${record.treatmentAcceptanceRate || 0}%`,
     `New Patients: ${record.newPatients.actual}`,
     `Add-On Production: ${money0(addOnTotal)}`,
@@ -319,15 +338,24 @@ function buildMailtoLink(record) {
   return `mailto:glenn@shiftagent.co?subject=${subject}&body=${body}`;
 }
 
+// simple flat SVG smiley (not a 3D/emoji-style face)
+const SMILEY_SVG = `<svg viewBox="0 0 100 100" width="88" height="88" role="img" aria-label="Smiley face">
+  <circle cx="50" cy="50" r="46" fill="#FFD35E" stroke="#1B2A4A" stroke-width="4"/>
+  <circle cx="34" cy="42" r="6" fill="#1B2A4A"/>
+  <circle cx="66" cy="42" r="6" fill="#1B2A4A"/>
+  <path d="M27 60 Q50 84 73 60" stroke="#1B2A4A" stroke-width="5" fill="none" stroke-linecap="round"/>
+</svg>`;
+
 // ---- this month's report (shown immediately after submit) ----
 function drawReport(record) {
   root.innerHTML = "";
   const collRate = record.performance.current.production ? Math.round(record.performance.current.collections / record.performance.current.production * 100) : 0;
   const addOnTotal = record.addOnServices.reduce((a, s) => a + (s.production || 0), 0);
   const docTotal = record.providers.reduce((a, p) => a + (p.collections || 0), 0);
+  const hygTotal = record.hygienists.reduce((a, h) => a + (h.collections || 0), 0);
 
   const wrap = el("div", { class: "quiz-card quiz-report" });
-  wrap.appendChild(el("div", { class: "quiz-done-face" }, T("😄")));
+  wrap.appendChild(el("div", { class: "quiz-done-face", html: SMILEY_SVG }));
   wrap.appendChild(el("h2", { class: "quiz-title" }, T("All done, thank you!")));
   wrap.appendChild(el("p", { class: "quiz-hint" }, T(`Here's this month's report, the one we'll use for the team meeting.`)));
 
@@ -363,7 +391,7 @@ function drawReport(record) {
     deltaRow("Net Collections", record.performance.current.collections, prior ? prior.performance.current.collections : null, money0),
     deltaRow("Collection Rate", collRate, priorCollRate, (v) => v + "%"),
     deltaRow("New Patients", record.newPatients.actual, prior ? prior.newPatients.actual : null, (v) => String(v)),
-    deltaRow("Hygiene Collections", record.hygieneCollections || 0, prior ? (prior.hygieneCollections || 0) : null, money0),
+    deltaRow("Hygiene Collections", hygTotal, prior ? prior.hygienists.reduce((a, h) => a + (h.collections || 0), 0) : null, money0),
     deltaRow("Treatment Acceptance", record.treatmentAcceptanceRate || 0, prior ? (prior.treatmentAcceptanceRate || 0) : null, (v) => v + "%"),
     deltaRow("Add-On Production", addOnTotal, prior ? prior.addOnServices.reduce((a, s) => a + (s.production || 0), 0) : null, money0),
     deltaRow("Doctor Collections (total)", docTotal, prior ? prior.providers.reduce((a, p) => a + (p.collections || 0), 0) : null, money0),
@@ -373,6 +401,12 @@ function drawReport(record) {
     wrap.appendChild(el("div", { class: "report-subhead" }, T("By Doctor")));
     wrap.appendChild(el("div", { class: "report-provider-list" }, record.providers.filter(p => p.name).map(p =>
       el("div", { class: "report-provider-row" }, [el("span", {}, T(p.name)), el("span", { class: "report-provider-amt" }, T(money0(p.collections)))])
+    )));
+  }
+  if (record.hygienists.filter(h => h.name).length) {
+    wrap.appendChild(el("div", { class: "report-subhead" }, T("By Hygienist")));
+    wrap.appendChild(el("div", { class: "report-provider-list" }, record.hygienists.filter(h => h.name).map(h =>
+      el("div", { class: "report-provider-row" }, [el("span", {}, T(h.name)), el("span", { class: "report-provider-amt" }, T(money0(h.collections)))])
     )));
   }
 
